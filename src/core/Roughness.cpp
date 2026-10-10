@@ -73,7 +73,7 @@ float selfPairWeight (float x) noexcept
 }
 
 float partialFriction (float f, float a, float l, const Partial* ref, const float* refLevel, int nR,
-                       int* dominant, float* dominantR) noexcept
+                       int* dominant, float* dominantR, const float* refS) noexcept
 {
     const Roughness& R = Roughness::get();
     int cand[kMaxPartials];
@@ -82,10 +82,13 @@ float partialFriction (float f, float a, float l, const Partial* ref, const floa
     int jStar = -1;
     float xBest = 1.0e9f;
     const int n = std::min (nR, kMaxPartials);
+    const float sf = Roughness::sFactor (f);
     for (int j = 0; j < n; ++j)
     {
         const float fj = ref[j].freq;
-        const float x = std::abs (f - fj) * Roughness::sFactor (std::min (f, fj));
+        // s is evaluated at the lower partial: precomputed per reference partial when available
+        const float s = fj < f ? (refS != nullptr ? refS[j] : Roughness::sFactor (fj)) : sf;
+        const float x = std::abs (f - fj) * s;
         if (x < xBest)
         {
             xBest = x;
@@ -132,10 +135,17 @@ float partialFriction (float f, float a, float l, const Partial* ref, const floa
 
 float computeCrossFriction (Partial* target, int nT, const Partial* ref, int nR, Clash* worst) noexcept
 {
-    float levR[kMaxPartials];
+    float levR[kMaxPartials], sR[kMaxPartials], reachLo[kMaxPartials];
     const int nr = std::min (nR, kMaxPartials);
+    bool sorted = true;
     for (int j = 0; j < nr; ++j)
+    {
         levR[j] = Roughness::level (ref[j].amp);
+        sR[j] = Roughness::sFactor (ref[j].freq);
+        reachLo[j] = ref[j].freq + Roughness::kXMax / sR[j]; // highest frequency this partial can be rough with
+        if (j > 0 && ref[j].freq < ref[j - 1].freq)
+            sorted = false;
+    }
 
     float total = 0.0f;
     float worstR = 0.0f;
@@ -144,7 +154,21 @@ float computeCrossFriction (Partial* target, int nT, const Partial* ref, int nR,
         Partial& p = target[i];
         int dom = -1;
         float domR = 0.0f;
-        p.friction = partialFriction (p.freq, p.amp, Roughness::level (p.amp), ref, levR, nr, &dom, &domR);
+        int j0 = 0, j1 = nr;
+        if (sorted)
+        {
+            // window of reference partials that can interact with p (both bounds are monotone in frequency);
+            // keep one partial either side so the coincidence search still sees the nearest neighbour
+            const float hi = p.freq + Roughness::windowHz (p.freq);
+            j0 = (int) (std::upper_bound (reachLo, reachLo + nr, p.freq) - reachLo);
+            j1 = (int) (std::lower_bound (ref, ref + nr, hi, [] (const Partial& q, float v) { return q.freq < v; }) - ref);
+            j0 = std::max (0, j0 - 1);
+            j1 = std::min (nr, j1 + 1);
+        }
+        p.friction = j1 > j0 ? partialFriction (p.freq, p.amp, Roughness::level (p.amp), ref + j0, levR + j0, j1 - j0, &dom, &domR, sR + j0)
+                             : 0.0f;
+        if (dom >= 0)
+            dom += j0;
         total += p.friction;
         if (worst != nullptr && dom >= 0 && domR > worstR)
         {
@@ -173,12 +197,20 @@ float computeSelfFriction (Partial* target, int nT, Clash* worst) noexcept
 
     float total = 0.0f;
     float worstR = 0.0f;
+    bool sorted = true;
+    for (int i = 1; i < n; ++i)
+        if (target[i].freq < target[i - 1].freq)
+            sorted = false;
+    const float xCut = (float) Roughness::xStar(); // selfPairWeight is zero beyond x*
     for (int i = 0; i < n; ++i)
     {
+        const float si = Roughness::sFactor (target[i].freq);
         for (int j = i + 1; j < n; ++j)
         {
             const float fi = target[i].freq, fj = target[j].freq;
-            const float x = std::abs (fi - fj) * Roughness::sFactor (std::min (fi, fj));
+            const float x = sorted ? (fj - fi) * si : std::abs (fi - fj) * Roughness::sFactor (std::min (fi, fj));
+            if (sorted && x >= xCut)
+                break;
             const float w = selfPairWeight (x);
             if (w <= 0.0f)
                 continue;

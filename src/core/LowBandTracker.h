@@ -93,7 +93,7 @@ private:
     int hopCounter = 0;
 
     int W = 120, tauMin = 9, tauMax = 146, hopDec = 16;
-    std::vector<float> frame, dfn, cmnd;
+    std::vector<float> frame, dfn, cmnd, hwin;
 
     float rawF0[3] {};
     int rawCount = 0;

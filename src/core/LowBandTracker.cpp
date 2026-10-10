@@ -44,6 +44,7 @@ void LowBandTracker::prepare (double sampleRate)
     decMask = decSize - 1;
 
     frame.assign ((size_t) (W + tauMax + 2), 0.0f);
+    hwin.assign ((size_t) (3 * tauMax + 16), 0.0f);
     dfn.assign ((size_t) (tauMax + 2), 0.0f);
     cmnd.assign ((size_t) (tauMax + 2), 1.0f);
     reset();
@@ -141,14 +142,22 @@ void LowBandTracker::analyse() noexcept
     const float* latestW = frame.data() + (span - W);
     for (int tau = 1; tau <= tauMax; ++tau)
     {
-        double acc = 0.0;
+        // single precision with 4 partial sums (vectorisable); precision-critical refinement runs in double below
+        float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
         const float* b = latestW - tau;
-        for (int n = 0; n < W; ++n)
+        int n = 0;
+        for (; n + 4 <= W; n += 4)
         {
-            const double d = (double) latestW[n] - (double) b[n];
-            acc += d * d;
+            const float d0 = latestW[n] - b[n], d1 = latestW[n + 1] - b[n + 1];
+            const float d2 = latestW[n + 2] - b[n + 2], d3 = latestW[n + 3] - b[n + 3];
+            acc0 += d0 * d0; acc1 += d1 * d1; acc2 += d2 * d2; acc3 += d3 * d3;
         }
-        dfn[(size_t) tau] = (float) acc;
+        for (; n < W; ++n)
+        {
+            const float d = latestW[n] - b[n];
+            acc0 += d * d;
+        }
+        dfn[(size_t) tau] = (acc0 + acc1) + (acc2 + acc3);
     }
     cmnd[0] = 1.0f;
     double running = 0.0;
@@ -266,9 +275,18 @@ void LowBandTracker::analyse() noexcept
             start = decCount - decSize + 1;
 
         const double maxH = std::min ((double) harmLimitHz, 0.45 * fsd);
+        // windowed segment computed once (periodic Hann over exactly Lh samples)
+        Lh = std::min (Lh, (int) hwin.size());
         double sumW = 0.0;
+        const std::complex<double> wrot (std::cos (kTwoPi / Lh), std::sin (kTwoPi / Lh));
+        std::complex<double> wz (1.0, 0.0);
         for (int i = 0; i < Lh; ++i)
-            sumW += 0.5 - 0.5 * std::cos (kTwoPi * i / Lh);
+        {
+            const double win = 0.5 - 0.5 * wz.real();
+            wz *= wrot;
+            hwin[(size_t) i] = (float) ((double) dec[(size_t) ((start + i) & decMask)] * win);
+            sumW += win;
+        }
         for (int k = 1; k <= kLfHarmonics; ++k)
         {
             const double fk = k * (double) f0;
@@ -282,8 +300,7 @@ void LowBandTracker::analyse() noexcept
             std::complex<double> z (1.0, 0.0), acc (0.0, 0.0);
             for (int i = 0; i < Lh; ++i)
             {
-                const double win = 0.5 - 0.5 * std::cos (kTwoPi * i / Lh);
-                acc += (double) dec[(size_t) ((start + i) & decMask)] * win * z;
+                acc += (double) hwin[(size_t) i] * z;
                 z *= rot;
             }
             e.harm[k - 1] = (float) (2.0 * std::abs (acc) / std::max (1.0e-9, sumW));

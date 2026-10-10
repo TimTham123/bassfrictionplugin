@@ -95,7 +95,7 @@ public:
     void prepare (int maxSlots);
     void reset() noexcept;
 
-    /** freq/amp: n peaks. outSlot receives the slot index per peak. */
+    /** freq/amp: n peaks sorted by frequency. outSlot receives the slot index per peak. */
     void update (const float* freq, const float* amp, int n, int* outSlot, double binHz) noexcept;
 
     bool isNew (int slot) const noexcept { return slots[(size_t) slot].born; }

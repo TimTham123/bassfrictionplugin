@@ -34,10 +34,10 @@ namespace
 
 FrictionEngine::FrictionEngine() = default;
 
-void FrictionEngine::configureAnalysis (Analysis& a, int N)
+void FrictionEngine::configureAnalysis (Analysis& a, int N, int H)
 {
     a.N = N;
-    a.H = N / 4;
+    a.H = H;
     a.specT.prepare (N, fs);
     a.specR.prepare (N, fs);
     a.trT.prepare (kMaxSlots);
@@ -72,7 +72,7 @@ void FrictionEngine::prepare (double sampleRate, int maxBlockSize, int numTarget
     mixN = k >= 0 ? (4096 << k) : (4096 >> -k);
     trackN = mixN / 2;
     mixH = mixN / 4;
-    trackH = trackN / 4;
+    trackH = trackN / 2; // Track mode only analyses (no overlap-add), so half overlap is enough
 
     ringSize = nextPow2 (2 * mixN + 4096);
     ringMask = ringSize - 1;
@@ -82,8 +82,8 @@ void FrictionEngine::prepare (double sampleRate, int maxBlockSize, int numTarget
     midR.assign ((size_t) ringSize, 0.0f);
     hpCoeff = 1.0 - kTwoPi * 10.0 / fs;
 
-    configureAnalysis (mixAna, mixN);
-    configureAnalysis (trackAna, trackN);
+    configureAnalysis (mixAna, mixN, mixH);
+    configureAnalysis (trackAna, trackN, trackH);
 
     lfT.prepare (fs);
     lfR.prepare (fs);
@@ -765,7 +765,8 @@ void FrictionEngine::onFrame() noexcept
     }
     totalSelfF = computeSelfFriction (curT, nCurT, &worstSelf);
 
-    frameIsTransient = onsets.anyOnsetIn (t - (3 * N) / 4, t - N / 4);
+    // transient protection: any onset inside the well-weighted part of the window (7/8 .. 1/8)
+    frameIsTransient = onsets.anyOnsetIn (t - (7 * N) / 8, t - N / 8);
     const float threshold = sensitivityToThreshold (params.sensitivity);
 
     if (activeLatency == LatencyMode::Mix)
@@ -791,13 +792,18 @@ void FrictionEngine::onFrame() noexcept
             pvPeakIndex[nPv] = p;
             ++nPv;
         }
-        if (selfMode)
-            computeSelfFriction (pvList, nPv, nullptr);
-        else if (nCurR > 0)
-            computeCrossFriction (pvList, nPv, curR, nCurR, nullptr);
-
+        bool pvState = pvMode;
+        for (int i = 0; i < nPv && ! pvState; ++i)
+            pvState = a.slots[(size_t) pvList[i].slot].shiftCents != 0.0f || pv.slotHasPhase (pvList[i].slot);
         nPvReq = 0;
-        decidePerPartial (a, threshold, activeMode == Mode::Tension);
+        if (pvState)
+        {
+            if (selfMode)
+                computeSelfFriction (pvList, nPv, nullptr);
+            else if (nCurR > 0)
+                computeCrossFriction (pvList, nPv, curR, nCurR, nullptr);
+            decidePerPartial (a, threshold, activeMode == Mode::Tension);
+        }
         if (! pvMode)
         {
             // shifts are releasing; keep the requests so phases stay continuous, or none at all
@@ -928,15 +934,15 @@ void FrictionEngine::decidePerPartial (Analysis& a, float threshold, bool tensio
 
         if (modeOn && eligible (q.freq, q.freq < xo))
         {
-            // local reference set: partials that can interact with q anywhere in +-maxC
+            // local reference set: partials that can matter for q anywhere in +-maxC (x < 1.5, zHat > 3 %)
             const Partial* src = selfMode ? pvList : curR;
             const int nSrc = selfMode ? nPv : nCurR;
             Partial loc[kMaxPartials];
-            float locL[kMaxPartials];
+            float locL[kMaxPartials], locS[kMaxPartials];
             int nl = 0;
             const float reachLo = q.freq * (float) centsToRatio (-maxC);
             const float reachHi = q.freq * (float) centsToRatio (maxC);
-            const float win = Roughness::windowHz (reachLo);
+            const float win = 1.5f / Roughness::sFactor (reachLo);
             for (int j = 0; j < nSrc && nl < kMaxPartials; ++j)
             {
                 if (selfMode && (j == i || src[j].amp < q.amp))
@@ -945,6 +951,7 @@ void FrictionEngine::decidePerPartial (Analysis& a, float threshold, bool tensio
                 {
                     loc[nl] = src[j];
                     locL[nl] = Roughness::level (src[j].amp);
+                    locS[nl] = Roughness::sFactor (src[j].freq);
                     ++nl;
                 }
             }
@@ -952,27 +959,54 @@ void FrictionEngine::decidePerPartial (Analysis& a, float threshold, bool tensio
             auto F = [&] (float cents)
             {
                 const float f = q.freq * (float) centsToRatio (cents);
-                return partialFriction (f, q.amp, lq, loc, locL, nl);
+                return partialFriction (f, q.amp, lq, loc, locL, nl, nullptr, nullptr, locS);
             };
             const float F0 = F (0.0f);
 
             if (! tension)
             {
                 const float tEff = st.targetCents != 0.0f ? 0.75f * threshold : threshold;
-                if (F0 > tEff && nl > 0)
+                // full searches are cached: they are repeated only when the partial or its friction
+                // changed, at least every 8 frames (shifts still glide every frame)
+                const bool unchanged = st.decidedF0 >= 0.0f && std::abs (q.freq - st.decidedFreq) < 0.0005f * q.freq
+                                       && std::abs (F0 - st.decidedF0) < 0.1f * st.decidedF0 + 0.005f
+                                       && frameCounter - st.decidedFrame < 8;
+                if (unchanged)
+                {
+                    desired = st.targetCents;
+                }
+                else if (F0 > tEff && nl > 0)
                 {
                     auto J = [&] (float c) { return F (c) + 0.1f * F0 * std::abs (c) / maxC; };
                     float bestC = 0.0f, bestJ = J (0.0f);
-                    for (float c = -maxC; c <= maxC; c += 2.0f)
+                    auto tryC = [&] (float c)
                     {
+                        if (std::abs (c) > maxC) return;
                         const float v = J (c);
                         if (v < bestJ) { bestJ = v; bestC = c; }
+                    };
+                    // candidates: unison with each nearby reference partial, plus a coarse grid
+                    for (int j = 0; j < nl; ++j)
+                        tryC ((float) centsBetween (q.freq, loc[j].freq));
+                    const float unisonBest = bestC, unisonJ = bestJ;
+                    float gridC = 0.0f, gridJ = J (0.0f);
+                    for (float c = -maxC; c <= maxC; c += 5.0f)
+                    {
+                        const float v = J (c);
+                        if (v < gridJ) { gridJ = v; gridC = c; }
                     }
-                    for (float c = bestC - 2.0f; c <= bestC + 2.0f; c += 0.25f)
+                    if (gridJ < unisonJ)
                     {
-                        if (std::abs (c) > maxC) continue;
-                        const float v = J (c);
-                        if (v < bestJ) { bestJ = v; bestC = c; }
+                        // optimum away from every reference partial: refine to 1 cent
+                        bestC = gridC;
+                        bestJ = gridJ;
+                        for (float c = gridC - 4.0f; c <= gridC + 4.0f; c += 1.0f)
+                            tryC (c);
+                    }
+                    else
+                    {
+                        bestC = unisonBest;
+                        bestJ = unisonJ;
                     }
                     if (bestJ < 0.5f * F0)
                     {
@@ -990,6 +1024,13 @@ void FrictionEngine::decidePerPartial (Analysis& a, float threshold, bool tensio
                     {
                         desired = st.targetCents;
                     }
+                    st.decidedFreq = q.freq;
+                    st.decidedF0 = F0;
+                    st.decidedFrame = frameCounter;
+                }
+                else
+                {
+                    st.decidedF0 = -1.0f;
                 }
             }
             else
@@ -1009,8 +1050,17 @@ void FrictionEngine::decidePerPartial (Analysis& a, float threshold, bool tensio
                 if (nearest >= 0)
                 {
                     const float fj = loc[nearest].freq;
-                    const float sign = q.freq >= fj ? 1.0f : -1.0f;
-                    const float fTarget = fj + sign * beta * Roughness::peakDeltaHz (fj);
+                    const float spacing = beta * Roughness::peakDeltaHz (fj);
+                    // keep the push direction once chosen; near unison push upward (estimation noise
+                    // must not flip the direction from frame to frame)
+                    float sign;
+                    if (st.targetCents != 0.0f)
+                        sign = st.targetCents > 0.0f ? 1.0f : -1.0f;
+                    else if (std::abs (q.freq - fj) < 0.25f * spacing)
+                        sign = 1.0f;
+                    else
+                        sign = q.freq >= fj ? 1.0f : -1.0f;
+                    const float fTarget = fj + sign * spacing;
                     desired = clampf ((float) centsBetween (q.freq, fTarget), -maxC, maxC);
                 }
             }
@@ -1045,6 +1095,13 @@ void FrictionEngine::decideWholeAuto (float threshold) noexcept
         return;
     }
 
+    // the global decision is re-evaluated on every other frame (the applied shift glides anyway)
+    if ((frameCounter & 1) != 0)
+    {
+        centsSched.push ({ centre, wholeDecided * amount });
+        return;
+    }
+
     float desired = 0.0f;
     if (! selfMode && nCurT > 0 && nCurR > 0)
     {
@@ -1057,15 +1114,22 @@ void FrictionEngine::decideWholeAuto (float threshold) noexcept
         if (total0 > threshold)
         {
             // per target partial: the reference partials it can interact with anywhere in +-maxC
+            // the strongest eligible target partials decide the global offset
+            int order[kMaxPartials];
+            int nOrd = 0;
+            for (int i = 0; i < nCurT; ++i)
+                if (eligible (curT[i].freq, curT[i].freq < params.crossoverHz))
+                    order[nOrd++] = i;
+            std::sort (order, order + nOrd, [&] (int x, int y) { return curT[x].amp > curT[y].amp; });
+            nOrd = std::min (nOrd, 48);
+
             int nSeg = 0, pool = 0;
-            for (int i = 0; i < nCurT && nSeg < kMaxPartials; ++i)
+            for (int oi = 0; oi < nOrd; ++oi)
             {
-                const Partial& p = curT[i];
-                if (! eligible (p.freq, p.freq < params.crossoverHz))
-                    continue;
+                const Partial& p = curT[order[oi]];
                 const float lo = p.freq * (float) centsToRatio (-maxC);
                 const float hi = p.freq * (float) centsToRatio (maxC);
-                const float win = Roughness::windowHz (lo);
+                const float win = 1.5f / Roughness::sFactor (lo);
                 WholeSeg& sg = wholeSegs[nSeg];
                 sg.f = p.freq;
                 sg.a = p.amp;
@@ -1076,6 +1140,7 @@ void FrictionEngine::decideWholeAuto (float threshold) noexcept
                     {
                         wholeRef[pool] = curR[j];
                         wholeRefL[pool] = Roughness::level (curR[j].amp);
+                        wholeRefS[pool] = Roughness::sFactor (curR[j].freq);
                         ++pool;
                     }
                 sg.len = pool - sg.start;
@@ -1089,18 +1154,19 @@ void FrictionEngine::decideWholeAuto (float threshold) noexcept
                 for (int k = 0; k < nSeg; ++k)
                 {
                     const WholeSeg& sg = wholeSegs[k];
-                    acc += partialFriction (sg.f * ratio, sg.a, sg.l, wholeRef + sg.start, wholeRefL + sg.start, sg.len);
+                    acc += partialFriction (sg.f * ratio, sg.a, sg.l, wholeRef + sg.start, wholeRefL + sg.start, sg.len,
+                                            nullptr, nullptr, wholeRefS + sg.start);
                 }
                 return acc + 0.1f * total0 * std::abs (c) / maxC;
             };
             float bestC = 0.0f, bestV = cost (0.0f);
-            for (float c = -maxC; c <= maxC; c += 1.0f)
+            for (float c = -maxC; c <= maxC; c += 2.0f)
             {
                 const float v = cost (c);
                 if (v < bestV) { bestV = v; bestC = c; }
             }
-            // golden-section refinement in [bestC - 1, bestC + 1]
-            float lo = std::max (-maxC, bestC - 1.0f), hi = std::min (maxC, bestC + 1.0f);
+            // golden-section refinement in [bestC - 2, bestC + 2]
+            float lo = std::max (-maxC, bestC - 2.0f), hi = std::min (maxC, bestC + 2.0f);
             const float gr = 0.6180339887f;
             float x1 = hi - gr * (hi - lo), x2 = lo + gr * (hi - lo);
             float f1 = cost (x1), f2 = cost (x2);
@@ -1333,13 +1399,27 @@ void FrictionEngine::publishDisplay (Analysis& a) noexcept
 
     const float* mT = a.specT.magnitudeDb();
     const float* mR = a.specR.magnitudeDb();
+    const double binHzA = fs / a.N;
+    const int maxBin = a.N / 2;
     for (int g = 0; g < DisplayFrame::kN; ++g)
     {
         float vt = -200.0f, vr = -200.0f;
-        for (int k = a.gridLo[(size_t) g]; k <= a.gridHi[(size_t) g]; ++k)
+        if (a.gridHi[(size_t) g] - a.gridLo[(size_t) g] <= 1)
         {
-            vt = std::max (vt, mT[k]);
-            vr = std::max (vr, mR[k]);
+            // grid finer than the FFT: interpolate between bins (log magnitude) instead of repeating bins
+            const double pos = std::min ((double) maxBin - 1.0, DisplayGrid::hzAt (g) / binHzA);
+            const int k0 = std::max (0, (int) pos);
+            const float fr = (float) (pos - k0);
+            vt = mT[k0] + fr * (mT[k0 + 1] - mT[k0]);
+            vr = mR[k0] + fr * (mR[k0 + 1] - mR[k0]);
+        }
+        else
+        {
+            for (int k = a.gridLo[(size_t) g]; k <= a.gridHi[(size_t) g]; ++k)
+            {
+                vt = std::max (vt, mT[k]);
+                vr = std::max (vr, mR[k]);
+            }
         }
         d.targetDb[g] = vt;
         d.refDb[g] = sidechainPresentNow ? vr : -200.0f;

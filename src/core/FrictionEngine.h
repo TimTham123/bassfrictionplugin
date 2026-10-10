@@ -88,6 +88,9 @@ private:
         float depthDb = 0.0f;      // Smooth: current attenuation (positive dB)
         float shiftCents = 0.0f;   // Retune/Push: current smoothed shift
         float targetCents = 0.0f;  // decided target
+        float decidedFreq = 0.0f;  // partial frequency / friction at the last full decision (cache)
+        float decidedF0 = -1.0f;
+        int decidedFrame = -1000;
         float lastFreq = 0.0f;
         float lastAmp = 0.0f;
         float loBin = 0.0f, hiBin = 0.0f; // region of the partial in the analysis spectrum
@@ -113,20 +116,20 @@ private:
     template <typename T, int Cap>
     struct Sched
     {
-        T items[Cap];
+        T items[static_cast<std::size_t> (Cap)];
         int head = 0, count = 0;
         void clear() noexcept { head = count = 0; }
         void push (const T& x) noexcept
         {
             if (count == Cap) { head = (head + 1) % Cap; --count; } // drop oldest
-            items[(head + count) % Cap] = x;
+            items[(size_t) ((head + count) % Cap)] = x;
             ++count;
         }
-        const T* peek() const noexcept { return count > 0 ? &items[head] : nullptr; }
+        const T* peek() const noexcept { return count > 0 ? &items[(size_t) head] : nullptr; }
         void pop() noexcept { if (count > 0) { head = (head + 1) % Cap; --count; } }
     };
 
-    void configureAnalysis (Analysis& a, int N);
+    void configureAnalysis (Analysis& a, int N, int H);
     void controlTick() noexcept;
     void onLfHop() noexcept;
     void onFrame() noexcept;
@@ -209,6 +212,7 @@ private:
     WholeSeg wholeSegs[kMaxPartials] {};
     Partial wholeRef[kMaxWholePairs] {};
     float wholeRefL[kMaxWholePairs] {};
+    float wholeRefS[kMaxWholePairs] {};
 
     float wholeTargetCents = 0.0f, wholeCents = 0.0f, wholeDecided = 0.0f;
     float wholeDecidedCost = 0.0f;

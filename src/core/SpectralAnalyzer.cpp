@@ -256,9 +256,14 @@ void PeakTracker::update (const float* freq, const float* amp, int n, int* outSl
             continue;
         const float tol = std::max (relTolerance, (float) (binTolerance * binHz) / std::max (1.0f, sl.freq))
                           * (sl.missed > 0 ? 1.5f : 1.0f);
-        for (int p = 0; p < n && nc < capacity; ++p)
+        // peaks arrive sorted by frequency: only scan the tolerance window
+        const float fLo = sl.freq * (1.0f - tol);
+        int p = (int) (std::lower_bound (freq, freq + n, fLo) - freq);
+        for (; p < n && nc < capacity; ++p)
         {
             const float rel = std::abs (freq[p] - sl.freq) / std::max (1.0f, sl.freq);
+            if (freq[p] > sl.freq && rel >= tol)
+                break;
             if (rel < tol)
                 cands[(size_t) nc++] = { rel / tol, s, p };
         }

@@ -107,7 +107,7 @@ float selfPairWeight (float x) noexcept;
     refLevel may be null (computed on the fly). Optionally reports the dominant pair contribution.
 */
 float partialFriction (float f, float a, float l, const Partial* ref, const float* refLevel, int nR,
-                       int* dominant = nullptr, float* dominantR = nullptr) noexcept;
+                       int* dominant = nullptr, float* dominantR = nullptr, const float* refS = nullptr) noexcept;
 
 /** Friction of every target partial against the reference set (fills Partial::friction).
     Returns total friction; optionally reports the worst pair. */
