@@ -147,3 +147,12 @@ Compiler: GCC 13.3
 | PASS | Automation stress (random params every 8 blocks, 6 s) | finite=1, peak 4.86 | finite output, no blow-up (trim up to +24 dB) |
 | PASS | Advisor: Learn -> Stop -> Apply sets Retune Whole Fixed | learned 8.0 s, best low-band offset +97 c, kick 52.1 Hz -> 55.1 Hz; applied: offset +97.0 c, mode 1, style 2, amount 100 % | final result, parameters set to Retune / Whole Fixed / offset / 100 % |
 | PASS | Editor renders in every mode and resizes (PNG snapshots) | 5 snapshots in renders/ui_*.png | no crash, 5 snapshots written |
+
+## External validators (Linux VST3 build of the same sources, run manually)
+
+| Result | Validator | Command | Outcome |
+|---|---|---|---|
+| PASS | pluginval 1.0.4 (Tracktion) | `pluginval --strictness-level 10 --skip-gui-tests --validate-in-process --validate Friction.vst3` | SUCCESS: scan, cold/warm open, programs (15), audio processing (incl. non-releasing), state and state restoration, automation, parameter thread safety, bus listing/enabling/disabling/restoring, parameter fuzzing. GUI tests skipped (no display in the container). |
+| PASS | Steinberg VST3 validator (VST3 SDK 3.8.1, built from source) | `validator -e Friction.vst3` | 537 tests passed, 0 tests failed |
+
+The Windows CI job runs the same pluginval check against the MSVC build.

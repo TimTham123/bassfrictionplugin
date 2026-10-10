@@ -26,6 +26,15 @@ jobs:
       - name: Plugin-level tests
         run: build\src\plugin\FrictionPluginTests_artefacts\Release\FrictionPluginTests.exe --out build\test_output --renders build\renders --append-report build\TEST_REPORT_windows.md
 
+      - name: pluginval 1.0.4 (strictness 10)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Windows.zip -OutFile pluginval.zip
+          Expand-Archive -Path pluginval.zip -DestinationPath pluginval
+          $exe = Get-ChildItem -Path pluginval -Recurse -Filter pluginval.exe | Select-Object -First 1
+          & $exe.FullName --strictness-level 10 --skip-gui-tests --validate-in-process --output-dir build\pluginval --validate build\src\plugin\Friction_artefacts\Release\VST3\Friction.vst3
+          if ($LASTEXITCODE -ne 0) { throw "pluginval failed with exit code $LASTEXITCODE" }
+
       - name: Upload plugin binaries
         if: always()
         uses: actions/upload-artifact@v4
@@ -44,6 +53,7 @@ jobs:
           path: |
             build/TEST_REPORT_windows.md
             build/renders/
+            build/pluginval/
           if-no-files-found: warn
 
   linux:
@@ -72,6 +82,12 @@ jobs:
       - name: Plugin-level tests
         run: ./build/src/plugin/FrictionPluginTests_artefacts/Release/FrictionPluginTests --out build/test_output --renders build/renders --append-report build/TEST_REPORT_linux.md
 
+      - name: pluginval 1.0.4 (strictness 10)
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Linux.zip
+          unzip -q -o pluginval.zip -d pluginval
+          ./pluginval/pluginval --strictness-level 10 --skip-gui-tests --validate-in-process --output-dir build/pluginval --validate build/src/plugin/Friction_artefacts/Release/VST3/Friction.vst3
+
       - name: Upload artefacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -81,4 +97,5 @@ jobs:
             build/src/plugin/Friction_artefacts/Release/VST3/
             build/src/plugin/Friction_artefacts/Release/Standalone/Friction
             build/TEST_REPORT_linux.md
+            build/pluginval/
           if-no-files-found: warn

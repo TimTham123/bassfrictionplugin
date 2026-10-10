@@ -96,15 +96,29 @@ The peak at 440 Hz is at Δf = 25.8 Hz.
 Derived quantities:
 
 * **Per-partial friction** of target partial $i$ against the reference:
-  $F_i = \sum_j r(f_i,a_i,f_j,a_j)$ over reference partials $j$. The whole pair is attributed to the
-  target partial, because only the target can be changed.
-* **Self (target-internal) friction:** $F^{self}_i = \sum_{j\ne i,\;a_j\ge a_i} r_{ij}$. Each pair
-  is attributed to its *weaker* partial (split equally on ties). Reason: attenuating the weaker
-  partial of a rough pair lowers $Y$ and so the beating. Attenuating both equally leaves $Y$
-  unchanged.
+  $F_i = \sum_j r(f_i,a_i,f_j,a_j)$ over reference partials $j$, with the coincidence correction
+  below. The whole pair is attributed to the target partial, because only the target can be changed.
+* **Coincidence correction** (added during implementation, §10 decision 16). Let $j^*$ be the
+  reference partial nearest to $f_i$ (smallest $x$). Let $w_c = 1$ for $x_{ij^*}\le x^*/4$, falling
+  with a raised cosine to 0 at $x^*$. Every other pair is then reduced by the roughness that
+  already exists *inside* the reference:
+  $F_i = r_{ij^*} + \sum_{j\ne j^*}\max\big(0,\;r_{ij} - w_c\,r_{j^*j}\big)$.
+  A target partial that coincides with a reference partial adds no new beating against that
+  partial's neighbours. Without the correction, a unison or octave doubling of a harmonic reference
+  scores as rough: its partials beat against the reference's neighbouring partials exactly as the
+  reference's own partials do.
+* **Self (target-internal) friction:** $F^{self}_i = \sum_{j\ne i,\;a_j\ge a_i} w_s(x_{ij})\,r_{ij}$,
+  with $w_s = 1$ for $x\le x^*/2$, raised-cosine to 0 at $x^*$. Only pairs closer than the
+  roughness peak count. The regular spacing of one tone's own harmonics ($f_0$ apart) is timbre,
+  not beating. Closely spaced partials (detuned unison, chorus, doubled takes) are what Self mode
+  should treat.
+  * Each pair is attributed to its *weaker* partial (split equally on ties). Reason: attenuating
+    the weaker partial of a rough pair lowers $Y$ and so the beating. Attenuating both equally
+    leaves $Y$ unchanged.
 * **Total friction:** $R = \sum_i F_i$. The display maps it to 0–100 with $100\tanh(R/2)$.
-* **Friction curve** (display): $c(E)=\sum_i F_i\,\exp(-\tfrac12((E-E_i)/0.5)^2)$ on a 192-point
-  ERB-rate grid. $E$ is the ERB number of §2.
+* **Friction curve** (display): $c(E)=\sum_i F_i\,\exp(-\tfrac12((E-E_i)/0.5)^2)$, a Gaussian of
+  0.5 ERB in ERB-rate $E$ (§2), truncated at ±2 ERB and evaluated on the 256-point
+  log-frequency display grid (20 Hz–20 kHz).
 * **Audibility gate:** partials below −84 dBFS, or more than 60 dB below the frame's strongest
   partial, are ignored. Without this, $X^{0.1}$ would let inaudible partials score.
 
@@ -166,19 +180,25 @@ processed linked (one decision for both channels), so the stereo image cannot sh
 * **Noise rejection:**
   1. Local maximum over ±2 bins.
   2. Above −96 dBFS and within 70 dB of the frame maximum.
-  3. More than 9 dB above the local log-spectral mean (±1 ERB).
-  4. **Reassignment consistency:** the instantaneous frequencies of bins $k-1, k, k+1$ must agree
-     within 0.3 bin. Noise peaks scatter; sinusoids do not. This test does the most to separate
-     tonal partials from noise.
+  3. **Prominence** of at least 10 dB over the surrounding floor: the log-spectral mean of ±ERB/2
+     (at least ±4 bins) around the peak's region, *excluding* the region itself, so a smeared peak
+     is not compared with itself.
+  4. **Reassignment consistency:** the reassigned frequency must lie within 0.75 bin of bin $k$,
+     and those of bins $k-1$ and $k+1$ must agree with it within 0.2 bin. Noise peaks scatter;
+     sinusoids do not. This test does the most to separate tonal partials from noise.
+  5. **Frequency-modulated partials** (vibrato, glides) fail test 4. They are kept when they are at
+     least 15 dB prominent. Their frequency is then the energy-weighted reassigned frequency of the
+     region, and their amplitude comes from the region's energy (Parseval; Hann sum of squares
+     $3N/8$). Verified with ±25–100 cent vibrato at 5.5 Hz (§11).
 * **Masking rejection:** a peak is dropped if it lies below the spreading threshold of a stronger
   peak in the same signal: $L_j - 18\,\text{dB} - 25\,\text{dB/ERB}\,(E_j-E_i)$ for $i$ below $j$,
   and $15\,\text{dB/ERB}$ slope above (upward spread of masking). Cross-signal masking (target under
   reference) needs no separate test. Vassilakis' $Y^{3.11}$ term already gives such a partial
   almost no roughness.
 * **Continuation (McAulay & Quatieri 1986):** peaks are matched greedily, nearest first, to existing
-  tracks within $\max(1\text{ bin},\;3\%)$. Unmatched tracks survive 2 frames before they die. Each
-  track carries an ID, so friction, gain and shift state can be smoothed *per partial* and dips
-  follow vibrato.
+  tracks within $\max(1\text{ bin},\;5\%)$ (×1.5 after a missed frame; 5 % ≈ 85 cents follows wide
+  vibrato at the hop rate). Unmatched tracks survive 2 frames before they die. Each track carries an
+  ID, so friction, gain and shift state can be smoothed *per partial* and dips follow vibrato.
 
 ### 3.2 Low band: time-domain fundamental tracking
 At 48 kHz an 85 ms STFT gives 11.7 Hz bins, about 3.7 semitones at 55 Hz, and it smears a kick's
@@ -188,13 +208,16 @@ pitch drop over the whole window. The low band therefore uses a time-domain trac
    runs at the full rate. It then decimates by $D=\mathrm{round}(f_s/4000)$ to $f_d\approx4$ kHz.
    The full-rate low-passed signal is kept in a ring buffer for step 3.
 2. **YIN** (de Cheveigné & Kawahara 2002) on the decimated signal: difference function
-   $d(\tau)=\sum_{n=0}^{W-1}(x_n-x_{n+\tau})^2$ with $W$ = 30 ms. Then the cumulative-mean-normalised
+   $d(\tau)=\sum_{n=0}^{W-1}(x_n-x_{n-\tau})^2$ with $W$ = 20 ms, **anchored at the newest
+   samples** (the latest $W$ samples against the $W$ samples one lag earlier), so a short period
+   locks in after $W+\tau$ rather than after the longest lag. Then the cumulative-mean-normalised
    difference $d'$, the absolute threshold 0.15 (first dip below it, which avoids octave-down
-   errors), and parabolic interpolation on $d$. Lag range covers 27.5–420 Hz. This step uses
-   35–66 ms of signal (35 ms at 200 Hz, 48 ms at 55 Hz, 66 ms at 27.5 Hz), within the "~30–50 ms"
-   target for normal bass ranges. I chose YIN over MPM (McLeod & Wyvill 2005) because its
-   first-dip-below-threshold rule is the better guard against the octave errors that strong 2nd
-   harmonics cause in bass and 808.
+   errors), and parabolic interpolation on $d$. Lag range covers 27.5–420 Hz.
+   * There is no DC blocker before YIN. The difference function ignores DC, and a high-pass would
+     add an onset transient that delays lock-in.
+   * Measured time to lock within 5 cents: 12–48 ms for 41–294 Hz, 56 ms at 31 Hz (§11).
+   * I chose YIN over MPM (McLeod & Wyvill 2005) because its first-dip-below-threshold rule is the
+     better guard against the octave errors that strong 2nd harmonics cause in bass and 808.
 3. **Full-rate refinement:** at 4 kHz one lag sample is 14 cents at 400 Hz, and parabolic
    interpolation is biased there. The difference function is re-evaluated on the *full-rate*
    low-passed buffer at the five lags around $\tau D$ and a parabola is fitted. This gives
@@ -204,9 +227,18 @@ pitch drop over the whole window. The low band therefore uses a time-domain trac
    that window length every other harmonic falls on a null of the Hann kernel, so the estimates do
    not leak into each other (pitch-synchronous analysis). Harmonic frequencies are taken as exactly
    $k f_0$; string inharmonicity in this range is < 1 cent.
-5. **Hop and kick drops:** an estimate every 4 ms. There is no continuity constraint beyond a
-   3-point median, so a 160→50 Hz drop over ~60 ms is followed. Voicing requires $d'_{min}<0.2$ and
-   band level > −70 dBFS.
+5. **Hop and kick drops:** an estimate every 4 ms (16 decimated samples). The only continuity
+   constraint is an outlier test: if the two previous estimates agree within 3 % and the new one
+   differs from both by more than 6 %, the previous value is held for that hop. Monotonic glides
+   such as a 160→52 Hz kick drop are followed. Voicing requires $d'_{min}<0.2$, band RMS above
+   $2\cdot10^{-4}$ (≈ −74 dBFS) and 25 Hz ≤ $f_0$ ≤ 440 Hz.
+6. **STFT cross-check** (added during implementation, §10 decision 19). YIN can lock onto a common
+   period of a low tone and a stronger tone above the crossover (measured: 52 Hz under 222 Hz read
+   as 55.6 Hz). In Mix mode (bins ≤ 15 Hz), a stationary STFT peak below 1.5× the crossover that
+   lies within one bin of a low-band harmonic but differs by more than max(0.3 Hz, 0.15 bin)
+   replaces that harmonic's frequency and amplitude. Non-stationary peaks (kick drops) keep the YIN
+   value. The correction ratio is reused on the 4 ms hops until the next frame, but only while the
+   tracker stays within 3 % of the $f_0$ it was measured at.
 
 **Band assignment:**
 * Below the crossover (default 200 Hz) the low-band tracker's partials are used while it is
@@ -222,6 +254,9 @@ pitch drop over the whole window. The low band therefore uses a time-domain trac
 * Depth, shift and synth-amplitude targets then go through the user Attack/Release one-pole filters.
 * Retune targets also have decision hysteresis: a new target is adopted only if it lowers friction
   by more than 20 % compared with the current one.
+* Per-partial Retune searches are cached per track. They are repeated only when the partial moved
+  by more than 0.05 % or its friction changed by more than 10 %, and at least every 8 frames. The
+  applied shift still glides every frame.
 
 ---
 
@@ -258,13 +293,21 @@ pitch drop over the whole window. The low band therefore uses a time-domain trac
     interpolator. This is an exact pitch shift with no phasiness and no transient smearing; at ±50
     cents the only side effect is a ±2.9 % time compression.
   * The read head drifts from the nominal latency-compensated position by $(\rho-1)$ samples per
-    sample. It is pulled back by splices: 12 ms equal-power crossfades at jumps chosen by normalised
-    cross-correlation, so the waveforms line up.
-  * Lookahead (inside the Mix-mode latency) shows upcoming onsets. A splice is forced to complete
-    just *before* each onset so every hit lands exactly on time, and no splice may start within
-    60 ms after an onset.
-  * At 50 cents a splice is needed only about once per second, and it falls in the quiet before a
-    hit.
+    sample. It is pulled back by splices when the drift exceeds 10 ms. Each splice is a 12 ms
+    crossfade to a jump target chosen by normalised cross-correlation over the 10 ms drift range,
+    so the waveforms line up. The crossfade is equal-gain when the correlation exceeds 0.6 and
+    equal-power otherwise.
+  * Lookahead (inside the Mix-mode latency) shows upcoming onsets.
+    * Before each onset, an **alignment splice** starts as late as possible, ending 1 ms before
+      the onset. Its target is pre-compensated for the drift that accumulates until the onset, so
+      every hit is output on time. It is skipped when the residual timing error would be below
+      0.3 ms. Measured worst onset displacement: 0.04 ms (§11).
+    * No routine splice starts within ~25 ms before an onset or within 60 ms after one. A forced
+      splice happens only beyond 30 ms of drift (at most 0.45 L).
+    * When the ratio returns to 1, a final splice puts the head back on the nominal position, and
+      the path is again an exact delay.
+  * At 50 cents the head drifts 10 ms in ≈0.34 s, so a routine splice happens roughly every
+    0.3 s; at 10 cents, every ≈1.7 s.
   * This is the "simpler, fewer artifacts" option the brief asks for: ideal for kicks, bass and any
     monophonic tonal source.
 
@@ -315,8 +358,8 @@ audio band split.**
 
 **Idle path:** when no partial is being processed for 4 consecutive frames (the overlap depth), the
 output is the exactly delayed dry signal (bit-exact). This guarantees the Amount-0 / silent-sidechain
-nulls and costs nothing to switch, because the overlap-add path is perfect-reconstruction to
-≈−140 dB.
+nulls. Switching between the two costs nothing audible, because the overlap-add path is
+perfect-reconstruction to within float rounding.
 
 **Sidechain handling:**
 * Sidechain bus disabled or 0 channels ⇒ status "No sidechain" ⇒ **Self** analysis
@@ -333,27 +376,43 @@ nulls and costs nothing to switch, because the overlap-add path is perfect-recon
   0.11 at 50 %, 0.066 at the 65 % default and 0.02 at 100 %.
 * **Depth per partial:** $D_i = 24\,\text{dB}\cdot \text{Amount}\cdot(1-e^{-(F_i-T)_+/0.15})$.
   This is proportional to friction × Amount for small excesses and saturates at 24 dB × Amount.
-* **High band (Mix):** dips are drawn around each active track in dB: full depth within ±1 bin,
-  raised-cosine skirt to ±3 bins (±35 Hz at N = 4096 / 48 kHz). Overlapping dips add, capped at
-  −24 dB. The same gains are applied to L and R spectra.
+* **High band (Mix):** dips are drawn around each active track in dB. Full depth covers the
+  partial's own peak region (valley to valley, shrunk by one bin on each side, but at least ±1 bin
+  around the partial), with raised-cosine skirts of 2 bins (11.7 Hz bins at N = 4096 / 48 kHz).
+  Overlapping dips add, capped at −30 dB. The same gains are applied to L and R spectra.
+* **Pre-echo guard (Mix STFT modes):** in the 25 ms before a detected onset, the overlap-add
+  output crossfades (2 ms raised cosine) to the time-aligned dry signal. Otherwise the STFT would
+  spread a removed or shifted component of the onset up to a window length *before* it. This
+  needs the onset detector to see soft onsets, so it also uses a second-difference
+  (+12 dB/oct) detection function (§10 decision 22).
 * **Low band:** one TPT state-variable bell (Simper/Cytomic form) per low-band harmonic (≤8). Each
   follows the partial's frequency, with BW = clamp(0.1 f, 3, 20) Hz, and coefficients are
   interpolated every 16 samples. With 0 dB gain the bell is an exact identity ($m_1=k(A^2-1)=0$).
 * **Track mode:** high-band partials also use bells, ≤24 of them, with BW = max(6 Hz, f/30), driven
-  by an analysis with N/2 that has no lookahead.
+  by an analysis with N/2 (2048 at 48 kHz) and hop N/4, which has no lookahead. When more than 24
+  partials want a dip, bells go to the highest priority, depth (dB) + partial level (dB), so
+  audible partials are served first.
 
 ### 6.2 Retune (Mix only)
-* **Per-partial:** for each target track with $F_i>T$ the cost
-  $J(c)=F_i(f_i2^{c/1200}) + 0.1\,F_i(f_i)\,|c|/c_{max}$ is evaluated for
-  $c\in[-c_{max},c_{max}]$ at 1-cent steps, against all reference partials. The second term prefers
-  the smallest shift that does the job. The shift is applied only if the best cost is below half the
-  current friction.
+* **Per-partial:** for each target track with $F_i>T$, the cost
+  $J(c)=F_i(f_i2^{c/1200}) + 0.1\,F_i(f_i)\,|c|/c_{max}$ is minimised over
+  $c\in[-c_{max},c_{max}]$, against the reference partials that can matter anywhere in that range.
+  * Candidates are exact unison with each of those reference partials, plus a 5-cent grid. When
+    the grid minimum beats every unison candidate, it is refined to 1 cent.
+  * The second term of $J$ prefers the smallest shift that does the job.
+  * The shift is applied only if the best cost is below half the current friction.
   * The minimum lands on unison with the nearest reference partial or on a spot clear of all of them.
     That is the low-roughness relationship available to a single partial; consonant ratios of
     complex tones emerge from these partial coincidences.
   * Shifts glide with Attack/Release and are scaled by Amount.
-* **Whole Auto:** one global offset minimises the total friction $\sum_i F_i$ over
-  $[-c_{max},c_{max}]$, with hysteresis. It then glides and feeds the resampling shifter.
+* **Whole Auto:** one global offset minimises $\sum_i F_i(c) + 0.1\,R_0\,|c|/c_{max}$ over the 48
+  strongest eligible target partials ($R_0$: total friction of the eligible target partials at
+  $c=0$). The search is a 2-cent grid followed by golden-section
+  refinement within ±2 cents, and runs on every other frame (≈43 ms at 48 kHz).
+  * It is applied only if it at least halves the friction.
+  * A new offset replaces the current one only if it lowers the cost by more than 20 %, or
+    differs by less than 3 cents.
+  * The result is scaled by Amount, glides with Attack/Release and feeds the resampling shifter.
 * **Whole Fixed:** a static offset (−1200…+1200 cents), set manually or by the Advisor's *Apply*.
 
 ### 6.3 Tension (Mix only)
@@ -385,14 +444,18 @@ nulls and costs nothing to switch, because the overlap-add path is perfect-recon
 * **Background thread** (`juce::Thread`, polls every 30 ms) accumulates the friction curve
   $R(c)=\sum_{frames}\sum_i\sum_j r(f_i2^{c/1200},a_i,f_j,a_j)$ for $c\in[-600,600]$ cents at
   1-cent steps.
-  * Each pair is evaluated only over the $c$ range where it can be rough. The cost is ≈1–2 ms per
-    second of audio.
+  * Each pair is evaluated only over the $c$ range where it can be rough. The cost was not
+    benchmarked separately, but in the plug-in test 8 s of audio are learned and finished within a
+    test run of under 3 s, so the Advisor runs faster than real time.
+  * The same coincidence correction as §1.4 is applied.
   * The low-band-only curve $R_{LF}(c)$ is accumulated the same way.
 * **On stop:** best offset $c^*=\arg\min R$, reported in cents (plus semitones + cents when
   $|c^*|\ge100$), with expected reduction $100\,(R(0)-R(c^*))/R(0)$ % and the curve plotted.
   *Apply* sets Retune → Whole Fixed with offset $c^*$.
 * **Kick vs bass:**
-  * Kick detection: the target shows onsets followed by a falling low-band f0 that settles.
+  * Kick detection: at least 3 onsets, and the target's low-band f0 in the first 30 ms after the
+    onsets lies on average more than 10 % above the f0 40–800 ms after them (a pitch drop that
+    settles).
   * Kick fundamental: the amplitude-weighted median of the settled f0 (≥40 ms after each onset).
   * Clashing bass notes: the reference low-band f0 during kick tails, quantised to note names with
     cents error and ranked by the friction they caused.
@@ -438,14 +501,14 @@ The Advisor's last result and the editor size are stored as extra properties in 
 
 | Mode | Reported latency | Components inside it | Analysis lag (control only) |
 |---|---|---|---|
-| Mix @ 44.1 / 48 kHz | N = 4096 smp (92.9 / 85.3 ms) | STFT frame N (OLA needs the full frame); LF tracker window + decimation delay (≈35–45 ms) used as lookahead; whole-signal drift window ±40 ms (≤ L/2) and 16-sample sinc half-width; onset lookahead | none (aligned) |
+| Mix @ 44.1 / 48 kHz | N = 4096 smp (92.9 / 85.3 ms) | STFT frame N (OLA needs the full frame); LF tracker window + decimation delay used as lookahead; whole-signal drift (normally ≤ 10 ms, forced splice at 30 ms ≤ 0.45 L) and 16-sample sinc half-width; onset lookahead (alignment splices, pre-echo guard) | none (aligned) |
 | Mix @ 88.2 / 96 kHz | N = 8192 smp (92.9 / 85.3 ms) | same | none |
 | Mix @ 176.4 / 192 kHz | N = 16384 smp (92.9 / 85.3 ms) | same | none |
-| Track (any rate) | **0 smp** | time-domain bells only | ≈25–30 ms (decisions lag the audio) |
+| Track (any rate) | **0 smp** | time-domain bells only | decisions lag the audio by about half a 43 ms window plus up to one 21 ms hop, plus the 30 ms friction rise **[estimated from the frame geometry, not measured]** |
 | Bypass | same as active mode | exact delay of dry | – |
 
 **Track mode trade-off:**
-* Dips arrive ~25 ms late on new notes, because decisions lag the audio.
+* Dips arrive a few tens of milliseconds late on new notes, because decisions lag the audio.
 * The high-band analysis window is half as long (≈43 ms, 23 Hz bins), so frequency precision is
   lower for dense spectra.
 * At most 24 + 8 simultaneous dips.
@@ -489,11 +552,72 @@ the host from the message thread.
 15. **Windows binaries:** this development container is Linux and its network policy blocks
     Microsoft's SDK/CRT downloads, so MSVC cannot run here. The CMake project is written for MSVC,
     and a GitHub Actions workflow builds VST3 + Standalone with MSVC on `windows-latest` and runs
-    the test harness there. Local builds and tests run on Linux (GCC 13 / Clang 18).
+    the test harness and pluginval there. Local builds and tests run on Linux (GCC 13). The MSVC
+    build links the static runtime, so the plug-in needs no VC++ redistributable.
+
+**Decisions taken during implementation** (each one forced by a failing test or a missed budget):
+
+16. **Coincidence correction** (§1.4). Without it, unison and octave references produced false
+    friction: a doubled harmonic tone scored as rough, and Smooth cut consonant material. With it,
+    a unison reference is bit-exact transparent. The amount of processing then follows consonance:
+    unison < octave < fifth < fourth/third/tritone/minor second.
+17. **Self friction only below the roughness peak** (§1.4). Otherwise a single harmonic tone scores
+    as rough against itself.
+18. **Vibrato-tolerant peak picking** (§3.1, test 5). The stationarity test alone dropped vibrato
+    partials. Strongly prominent non-stationary peaks are now kept, with energy-based estimates.
+19. **YIN: 20 ms window anchored at the newest samples, no DC blocker, STFT cross-check** (§3.2).
+    The first design (30 ms window anchored at the oldest samples, with a DC blocker) took
+    56–72 ms to lock. The cross-check fixes subharmonic locks under a strong tone above the
+    crossover.
+20. **Track mode: 2048-sample analysis (48 kHz) with 50 % overlap; bells allocated by depth +
+    level** (§6.1). Track mode only analyses and never resynthesises, so half overlap is enough. The
+    priority rule fixed a measured case: the bells went to weak high-frequency partials with
+    inflated friction scores, and the audible clash was left uncut.
+21. **Per-partial search by candidates plus a cache; Whole Auto on the 48 strongest partials every
+    other frame** (§3.3, §6.2). Needed for the Mix CPU budget (< 10 %). Measured: 7.8 % and 6.3 %.
+22. **Pre-echo guard and a second-difference onset function** (§6.1). The demo tests found
+    +11 dB high-frequency bursts 5 ms before quiet piano notes. The STFT smeared removed energy of
+    soft onsets backwards, and the broadband and first-difference detection functions did not
+    detect those onsets over a ringing chord.
+23. **Late, drift-compensated alignment splices** (§4). The first design spliced early, so the head
+    drifted again before the hit. With large offsets (+96 cents, from the Advisor's kick retune)
+    hits came out early and the splice added high-frequency energy.
+24. **Raised-cosine transition fades** (10 ms, for mode and latency switching). They splatter less
+    than linear ramps. Measured worst burst while switching: −56.5 dB re output RMS (§11).
+25. **Per-partial Retune ships.** It passed every artifact test (transient smearing, phasiness,
+    partials outside Range; §11), so decision 9's fallback (Whole-signal only) was not needed.
 
 ---
 
 ## 11. Verification results
 
-The test harness (`tests/`) writes `TEST_REPORT.md` and WAV renders. See that file for the measured
-numbers from the latest run; this section summarises them once the suite has been run.
+The harness (`tests/`) generates `TEST_REPORT.md`, which lists every check with its measured value and
+criterion, and the WAV renders in `renders/`. Summary of the run on Linux (GCC 13.3, 2.1 GHz
+Xeon VM): **67/67 core checks and 9/9 plug-in checks pass.** External validators on the Linux
+VST3: **pluginval 1.0.4 at strictness 10 passes**, and **Steinberg's VST3 validator (SDK 3.8.1,
+extensive mode) passes 537/537 tests.**
+
+| Brief item | Measured |
+|---|---|
+| Sine pairs 440 / 440+d Hz, d = 0, 1, 3, 10, 30, 100 | 0.000, 0.089, 0.247, 0.625, 0.860, 0.206. Equal to the model (§1.4) within rounding; peak at 25.8 Hz = 23 % of Zwicker's CB. The same holds at 60 Hz through the low-band (YIN) path. |
+| Two saws 8 cents apart, Smooth | Beating modulation depth −13.3 dB (mean of 12 harmonics; fundamental −7.0 dB) in Mix, −14.5 dB in Track, at Amount 100 %, Sensitivity 80 %. Low band 55 vs 57.2 Hz: −17.8 dB. |
+| Two saws 8 cents apart, Retune | Beat rate 1.019 Hz → 0.001 Hz (Whole Auto) / 0.002 Hz (per-partial); every harmonic < 0.01 Hz. |
+| Kick (pitch drop to 52 Hz) vs bass line, Advisor | Best offset +96 cents vs oracle +97 cents (criterion ±5 cents). Kick fundamental 52.1 Hz (true 52.0); clashing notes C2, A1, G1 listed; best-compromise kick 55.0 Hz (A1). |
+| Nulls | Amount 0 and Mix 0 in every mode, and a silent sidechain: output **bit-exact** equal to the dry signal delayed by the latency. |
+| Consonant references | Unison: bit-exact (no processing). Octave: residual −35.1 dB re input. |
+| Retune artifacts | Drum hits: no pre-echo (at the level of the input's silence between hits); attack energy within 0.21 dB (above 2 kHz within 0.72 dB). Phasiness: crest factor 16.8 → 15.7 dB, AM ripple of a shifted partial 0.04 dB. Partials outside Range: residual −58 / −66 dB. Whole-signal hits on time within 0.04 ms. |
+| Robustness | NaN/Inf (treated as 0), DC passed unchanged, denormal-level input (time ratio 0.18), **bit-exact block-size independence** (block sizes 1, 7, 64, 333, 512, 4096, all modes), the same Smooth/Retune results at 44.1–192 kHz, linked stereo exact, live mode switching (worst burst −56.5 dB), +18 dBFS input. |
+| Latency | Impulse latency equals the reported latency at 6 sample rates × 2 modes; output aligned while processing; bypass latency-compensated. |
+| CPU (48 kHz, stereo + stereo sidechain) | Mix: Smooth 4.5 %, per-partial Retune 7.8 %, Whole Auto 6.3 %, Tension 4.4 %. Track: 2.4 % of one core. |
+| Musical demos | Piano-like part (+18 cents) vs pad: mean friction −64 % (Smooth), −59 % (per-partial), −37 % (Whole Auto). Kick vs bass: −71 % (Smooth, Focus Low), −21 % (Advisor's +96-cent kick retune). No added high-frequency bursts > +3 dB in any render. |
+
+**Not verified:**
+* **[UNVERIFIED: no listening tests]** The roughness model, the thresholds and the musical value of
+  the processing were judged by measurement only, on synthetic signals.
+* **[UNVERIFIED: no DAW testing]** The plug-in was exercised by its own test host, pluginval and
+  Steinberg's validator, not inside Live, FL Studio, Reaper, Cubase, Studio One or Bitwig. The
+  README's routing steps come from those DAWs' documentation.
+* **[UNVERIFIED: real recordings]** Dense polyphonic mixes, noisy recordings and extreme vibrato
+  were not tested beyond the synthetic cases above.
+* Windows: the binaries are built and tested by CI (MSVC on `windows-latest`). The README states
+  which commit's CI run to download.
