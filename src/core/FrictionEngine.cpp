@@ -890,6 +890,7 @@ void FrictionEngine::decideSmooth (Analysis& a, float threshold) noexcept
             target = depthFor (st.fSmooth - tEff, params.amount);
         smoothTo (st.depthDb, target, aAtt, aRel, 0.01f);
         st.lastFreq = p.freq;
+        st.lastAmp = p.amp;
         st.loBin = p.lo;
         st.hiBin = p.hi;
     }
@@ -917,7 +918,6 @@ void FrictionEngine::decidePerPartial (Analysis& a, float threshold, bool tensio
     const float maxC = clampf (params.maxCents, 1.0f, 100.0f);
     const float xo = params.crossoverHz;
     const float beta = 0.04f * std::pow (25.0f, clampf (params.beatRate, 0.0f, 1.0f));
-    const Roughness& R = Roughness::get();
     const SpectralPeak* pk = a.specT.peaks();
 
     for (int i = 0; i < nPv; ++i)
@@ -952,10 +952,7 @@ void FrictionEngine::decidePerPartial (Analysis& a, float threshold, bool tensio
             auto F = [&] (float cents)
             {
                 const float f = q.freq * (float) centsToRatio (cents);
-                float acc = 0.0f;
-                for (int j = 0; j < nl; ++j)
-                    acc += R.pairL (f, q.amp, lq, loc[j].freq, loc[j].amp, locL[j]);
-                return acc;
+                return partialFriction (f, q.amp, lq, loc, locL, nl);
             };
             const float F0 = F (0.0f);
 
@@ -1052,7 +1049,6 @@ void FrictionEngine::decideWholeAuto (float threshold) noexcept
     if (! selfMode && nCurT > 0 && nCurR > 0)
     {
         const float maxC = clampf (params.maxCents, 1.0f, 100.0f);
-        const Roughness& R = Roughness::get();
         float total0 = 0.0f;
         for (int i = 0; i < nCurT; ++i)
             if (eligible (curT[i].freq, curT[i].freq < params.crossoverHz))
@@ -1060,10 +1056,9 @@ void FrictionEngine::decideWholeAuto (float threshold) noexcept
 
         if (total0 > threshold)
         {
-            // candidate pairs
-            WholePair* pairs = wholePairs;
-            int np = 0;
-            for (int i = 0; i < nCurT; ++i)
+            // per target partial: the reference partials it can interact with anywhere in +-maxC
+            int nSeg = 0, pool = 0;
+            for (int i = 0; i < nCurT && nSeg < kMaxPartials; ++i)
             {
                 const Partial& p = curT[i];
                 if (! eligible (p.freq, p.freq < params.crossoverHz))
@@ -1071,19 +1066,31 @@ void FrictionEngine::decideWholeAuto (float threshold) noexcept
                 const float lo = p.freq * (float) centsToRatio (-maxC);
                 const float hi = p.freq * (float) centsToRatio (maxC);
                 const float win = Roughness::windowHz (lo);
-                for (int j = 0; j < nCurR && np < kMaxWholePairs; ++j)
-                {
-                    const Partial& r = curR[j];
-                    if (r.freq > lo - win && r.freq < hi + win)
-                        pairs[np++] = { p.freq, p.amp, Roughness::level (p.amp), r.freq, r.amp, Roughness::level (r.amp) };
-                }
+                WholeSeg& sg = wholeSegs[nSeg];
+                sg.f = p.freq;
+                sg.a = p.amp;
+                sg.l = Roughness::level (p.amp);
+                sg.start = pool;
+                for (int j = 0; j < nCurR && pool < kMaxWholePairs; ++j)
+                    if (curR[j].freq > lo - win && curR[j].freq < hi + win)
+                    {
+                        wholeRef[pool] = curR[j];
+                        wholeRefL[pool] = Roughness::level (curR[j].amp);
+                        ++pool;
+                    }
+                sg.len = pool - sg.start;
+                if (sg.len > 0)
+                    ++nSeg;
             }
             auto cost = [&] (float c)
             {
                 const float ratio = (float) centsToRatio (c);
                 float acc = 0.0f;
-                for (int k = 0; k < np; ++k)
-                    acc += R.pairL (pairs[k].fi * ratio, pairs[k].ai, pairs[k].li, pairs[k].fj, pairs[k].aj, pairs[k].lj);
+                for (int k = 0; k < nSeg; ++k)
+                {
+                    const WholeSeg& sg = wholeSegs[k];
+                    acc += partialFriction (sg.f * ratio, sg.a, sg.l, wholeRef + sg.start, wholeRefL + sg.start, sg.len);
+                }
                 return acc + 0.1f * total0 * std::abs (c) / maxC;
             };
             float bestC = 0.0f, bestV = cost (0.0f);
@@ -1267,7 +1274,9 @@ void FrictionEngine::updateTrackBells (Analysis& a) noexcept
     for (int s = 0; s < (int) a.slots.size(); ++s)
         if (a.slots[(size_t) s].depthDb > 0.0f && a.trT.isUsed (s) && a.slots[(size_t) s].lastFreq > 0.0f)
             cand[nc++] = s;
-    std::sort (cand, cand + nc, [&] (int x, int y) { return a.slots[(size_t) x].depthDb > a.slots[(size_t) y].depthDb; });
+    // priority: depth plus partial level (dB), so audible partials get the limited bells first
+    auto prio = [&] (int s) { const SlotState& st = a.slots[(size_t) s]; return st.depthDb + gainToDb (st.lastAmp, -120.0f); };
+    std::sort (cand, cand + nc, [&] (int x, int y) { return prio (x) > prio (y); });
     nc = std::min (nc, kTrackHfBells);
 
     // release bells whose owner is no longer a candidate

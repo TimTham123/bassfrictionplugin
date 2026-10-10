@@ -22,9 +22,9 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kTwoPi = 2.0 * kPi;
 
 constexpr int kMaxChannels = 2;      // target and reference are each mono or stereo
-constexpr int kMaxPeaks = 96;        // STFT peaks kept per signal per frame
-constexpr int kMaxPartials = 64;     // merged partials per signal per frame
-constexpr int kMaxSlots = 160;       // tracker slots per signal
+constexpr int kMaxPeaks = 160;       // STFT peaks kept per signal per frame
+constexpr int kMaxPartials = kMaxPeaks + 16; // merged partials per signal per frame (all peaks + low-band harmonics)
+constexpr int kMaxSlots = 224;       // tracker slots per signal (peaks plus coasting tracks)
 constexpr int kLfHarmonics = 8;      // low-band harmonics per tracker
 constexpr int kControlTick = 16;     // all control events happen on multiples of this
 

@@ -54,9 +54,84 @@ const Roughness& Roughness::get()
     return instance;
 }
 
-float computeCrossFriction (Partial* target, int nT, const Partial* ref, int nR, Clash* worst) noexcept
+float coincidenceWeight (float x) noexcept
+{
+    const float xs = (float) Roughness::xStar();
+    const float x0 = 0.25f * xs;
+    if (x <= x0) return 1.0f;
+    if (x >= xs) return 0.0f;
+    return 0.5f * (1.0f + std::cos ((float) kPi * (x - x0) / (xs - x0)));
+}
+
+float selfPairWeight (float x) noexcept
+{
+    const float xs = (float) Roughness::xStar();
+    const float x0 = 0.5f * xs;
+    if (x <= x0) return 1.0f;
+    if (x >= xs) return 0.0f;
+    return 0.5f * (1.0f + std::cos ((float) kPi * (x - x0) / (xs - x0)));
+}
+
+float partialFriction (float f, float a, float l, const Partial* ref, const float* refLevel, int nR,
+                       int* dominant, float* dominantR) noexcept
 {
     const Roughness& R = Roughness::get();
+    int cand[kMaxPartials];
+    float candR[kMaxPartials];
+    int nc = 0;
+    int jStar = -1;
+    float xBest = 1.0e9f;
+    const int n = std::min (nR, kMaxPartials);
+    for (int j = 0; j < n; ++j)
+    {
+        const float fj = ref[j].freq;
+        const float x = std::abs (f - fj) * Roughness::sFactor (std::min (f, fj));
+        if (x < xBest)
+        {
+            xBest = x;
+            jStar = j;
+        }
+        if (x >= Roughness::kXMax)
+            continue;
+        const float lj = refLevel != nullptr ? refLevel[j] : Roughness::level (ref[j].amp);
+        const float r = l * lj * R.fluct (a, ref[j].amp) * R.zHat (x);
+        if (r > 0.0f)
+        {
+            cand[nc] = j;
+            candR[nc] = r;
+            ++nc;
+        }
+    }
+
+    const float w = jStar >= 0 ? coincidenceWeight (xBest) : 0.0f;
+    float acc = 0.0f, best = 0.0f;
+    int bestJ = -1;
+    for (int c = 0; c < nc; ++c)
+    {
+        const int j = cand[c];
+        float r = candR[c];
+        if (w > 0.0f && j != jStar)
+        {
+            const Partial& ps = ref[jStar];
+            const float ls = refLevel != nullptr ? refLevel[jStar] : Roughness::level (ps.amp);
+            const float lj = refLevel != nullptr ? refLevel[j] : Roughness::level (ref[j].amp);
+            const float rInternal = R.pairL (ps.freq, ps.amp, ls, ref[j].freq, ref[j].amp, lj);
+            r = std::max (0.0f, r - w * rInternal);
+        }
+        acc += r;
+        if (r > best)
+        {
+            best = r;
+            bestJ = j;
+        }
+    }
+    if (dominant != nullptr) *dominant = bestJ;
+    if (dominantR != nullptr) *dominantR = best;
+    return acc;
+}
+
+float computeCrossFriction (Partial* target, int nT, const Partial* ref, int nR, Clash* worst) noexcept
+{
     float levR[kMaxPartials];
     const int nr = std::min (nR, kMaxPartials);
     for (int j = 0; j < nr; ++j)
@@ -67,28 +142,20 @@ float computeCrossFriction (Partial* target, int nT, const Partial* ref, int nR,
     for (int i = 0; i < nT; ++i)
     {
         Partial& p = target[i];
-        const float li = Roughness::level (p.amp);
-        float acc = 0.0f;
-        for (int j = 0; j < nr; ++j)
+        int dom = -1;
+        float domR = 0.0f;
+        p.friction = partialFriction (p.freq, p.amp, Roughness::level (p.amp), ref, levR, nr, &dom, &domR);
+        total += p.friction;
+        if (worst != nullptr && dom >= 0 && domR > worstR)
         {
-            const float r = R.pairL (p.freq, p.amp, li, ref[j].freq, ref[j].amp, levR[j]);
-            if (r > 0.0f)
-            {
-                acc += r;
-                if (worst != nullptr && r > worstR)
-                {
-                    worstR = r;
-                    worst->valid = true;
-                    worst->targetHz = p.freq;
-                    worst->refHz = ref[j].freq;
-                    worst->cents = (float) centsBetween (ref[j].freq, p.freq);
-                    worst->beatHz = std::abs (p.freq - ref[j].freq);
-                    worst->roughness = r;
-                }
-            }
+            worstR = domR;
+            worst->valid = true;
+            worst->targetHz = p.freq;
+            worst->refHz = ref[dom].freq;
+            worst->cents = (float) centsBetween (ref[dom].freq, p.freq);
+            worst->beatHz = std::abs (p.freq - ref[dom].freq);
+            worst->roughness = domR;
         }
-        p.friction = acc;
-        total += acc;
     }
     return total;
 }
@@ -110,7 +177,12 @@ float computeSelfFriction (Partial* target, int nT, Clash* worst) noexcept
     {
         for (int j = i + 1; j < n; ++j)
         {
-            const float r = R.pairL (target[i].freq, target[i].amp, lev[i], target[j].freq, target[j].amp, lev[j]);
+            const float fi = target[i].freq, fj = target[j].freq;
+            const float x = std::abs (fi - fj) * Roughness::sFactor (std::min (fi, fj));
+            const float w = selfPairWeight (x);
+            if (w <= 0.0f)
+                continue;
+            const float r = w * R.pairL (fi, target[i].amp, lev[i], fj, target[j].amp, lev[j]);
             if (r <= 0.0f)
                 continue;
             total += r;
@@ -138,12 +210,7 @@ float computeSelfFriction (Partial* target, int nT, Clash* worst) noexcept
 
 float frictionAgainst (float f, float a, const Partial* ref, int nR) noexcept
 {
-    const Roughness& R = Roughness::get();
-    const float l = Roughness::level (a);
-    float acc = 0.0f;
-    for (int j = 0; j < nR; ++j)
-        acc += R.pairL (f, a, l, ref[j].freq, ref[j].amp, Roughness::level (ref[j].amp));
-    return acc;
+    return partialFriction (f, a, Roughness::level (a), ref, nullptr, nR);
 }
 
 } // namespace fr

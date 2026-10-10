@@ -88,6 +88,27 @@ private:
     float yTab[kYN + 2] {};
 };
 
+/**
+    Coincidence weight. A target partial lying close to a reference partial j* (x below the
+    roughness peak) mostly reinforces j*; its pairs with j*'s neighbours duplicate pairs the
+    reference already has with itself (the reference timbre's own harmonic spacing). Those
+    duplicated parts are not friction caused by the target. Weight is 1 for x <= xStar / 4, fading to 0
+    at x = xStar. See DESIGN.md section 1.4.
+*/
+float coincidenceWeight (float x) noexcept;
+
+/** Weight applied to target-internal pairs: only close pairs (x <= xStar / 2, fading to 0 at xStar) count as
+    internal beating; wider pairs are the timbre's own resolved-harmonic structure. */
+float selfPairWeight (float x) noexcept;
+
+/**
+    Friction of one partial (f, a, level l = a^0.1) against a reference set, with the coincidence
+    correction: sum_j r(f, j) - w(x_j*) * sum_{k != j*} min(r(f, k), r(j*, k)).
+    refLevel may be null (computed on the fly). Optionally reports the dominant pair contribution.
+*/
+float partialFriction (float f, float a, float l, const Partial* ref, const float* refLevel, int nR,
+                       int* dominant = nullptr, float* dominantR = nullptr) noexcept;
+
 /** Friction of every target partial against the reference set (fills Partial::friction).
     Returns total friction; optionally reports the worst pair. */
 float computeCrossFriction (Partial* target, int nT, const Partial* ref, int nR, Clash* worst) noexcept;

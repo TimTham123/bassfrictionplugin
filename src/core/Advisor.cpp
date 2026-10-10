@@ -43,45 +43,73 @@ void Advisor::consume (const AdvisorFrame& f)
     ++frames;
     seconds += dt;
 
-    float lt[AdvisorFrame::kMax], lr[AdvisorFrame::kMax];
-    for (int i = 0; i < f.nT; ++i) lt[i] = Roughness::level (f.ta[i]);
-    for (int j = 0; j < f.nR; ++j) lr[j] = Roughness::level (f.ra[j]);
+    // reference partials sorted by frequency, with levels and the internal pair matrix
+    constexpr int M = AdvisorFrame::kMax;
+    int order[M];
+    const int nR = std::min<int> (f.nR, M);
+    for (int j = 0; j < nR; ++j)
+        order[j] = j;
+    std::sort (order, order + nR, [&] (int x, int y) { return f.rf[x] < f.rf[y]; });
+    float rf[M], ra[M], rl[M], rw[M];
+    bool rLow[M];
+    for (int j = 0; j < nR; ++j)
+    {
+        rf[j] = f.rf[order[j]];
+        ra[j] = f.ra[order[j]];
+        rl[j] = Roughness::level (ra[j]);
+        rw[j] = rf[j] + Roughness::windowHz (rf[j]); // upper reach of each reference partial
+        rLow[j] = f.rLow[order[j]] != 0;
+    }
+    float rint[M][M];
+    for (int j = 0; j < nR; ++j)
+        for (int k = 0; k < nR; ++k)
+            rint[j][k] = j == k ? 0.0f : rough.pairL (rf[j], ra[j], rl[j], rf[k], ra[k], rl[k]);
 
     double lfClash = 0.0;
+    float rr[M];
     for (int i = 0; i < f.nT; ++i)
     {
-        const float fi = f.tf[i];
-        if (fi <= 0.0f)
+        const float fi = f.tf[i], ai = f.ta[i];
+        if (fi <= 0.0f || ai <= 0.0f || nR == 0)
             continue;
-        for (int j = 0; j < f.nR; ++j)
+        const float li = Roughness::level (ai);
+        const bool tLow = f.tLow[i] != 0;
+        int jLo = 0, jHi = -1;
+        for (int c = -kRange; c <= kRange; ++c)
         {
-            const float fj = f.rf[j];
-            if (fj <= 0.0f)
+            const float fs = fi * pow2[(size_t) (c + kRange)];
+            // candidates: reference partials whose roughness window reaches fs (both directions)
+            while (jLo < nR && rw[jLo] <= fs)
+                ++jLo;
+            const float upper = fs + Roughness::windowHz (fs);
+            while (jHi + 1 < nR && rf[jHi + 1] < upper)
+                ++jHi;
+            if (jLo > jHi)
                 continue;
-            const float w = lt[i] * lr[j] * rough.fluct (f.ta[i], f.ra[j]);
-            if (w < 1.0e-7f)
-                continue;
-            const bool lowPair = f.tLow[i] != 0 && f.rLow[j] != 0;
 
-            const float fLowest = std::min (fi * pow2[0], fj);
-            const float win = Roughness::windowHz (fLowest);
-            const double cLo = 1200.0 * std::log2 (std::max (fj - win, 1.0e-3f) / fi);
-            const double cHi = 1200.0 * std::log2 ((fj + win) / fi);
-            const int iLo = std::max (-kRange, (int) std::ceil (cLo));
-            const int iHi = std::min (kRange, (int) std::floor (cHi));
-            for (int c = iLo; c <= iHi; ++c)
+            int jStar = -1;
+            float xBest = 1.0e9f;
+            for (int j = jLo; j <= jHi; ++j)
             {
-                const float fs = fi * pow2[(size_t) (c + kRange)];
-                const float x = std::abs (fs - fj) * Roughness::sFactor (std::min (fs, fj));
-                if (x >= Roughness::kXMax)
-                    continue;
-                const double r = (double) (w * rough.zHat (x)) * dt;
-                R[(size_t) (c + kRange)] += r;
-                if (lowPair)
-                    RLF[(size_t) (c + kRange)] += r;
-                if (c == 0 && lowPair)
-                    lfClash += r;
+                const float x = std::abs (fs - rf[j]) * Roughness::sFactor (std::min (fs, rf[j]));
+                rr[j] = x < Roughness::kXMax ? li * rl[j] * rough.fluct (ai, ra[j]) * rough.zHat (x) : 0.0f;
+                if (x < xBest) { xBest = x; jStar = j; }
             }
+            const float w = coincidenceWeight (xBest);
+            double sum = 0.0, sumLow = 0.0;
+            for (int j = jLo; j <= jHi; ++j)
+            {
+                float r = rr[j];
+                if (w > 0.0f && j != jStar)
+                    r = std::max (0.0f, r - w * rint[jStar][j]);
+                sum += r;
+                if (tLow && rLow[j])
+                    sumLow += r;
+            }
+            R[(size_t) (c + kRange)] += sum * dt;
+            RLF[(size_t) (c + kRange)] += sumLow * dt;
+            if (c == 0)
+                lfClash += sumLow * dt;
         }
     }
     r0Integral = R[(size_t) kRange];

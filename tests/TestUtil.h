@@ -28,7 +28,7 @@ inline Buf sine (double fs, double seconds, double f, double amp, double phase =
 }
 
 /** Band-limited sawtooth (additive), amplitude of harmonic k = amp / k. */
-inline Buf saw (double fs, double seconds, double f, double amp, int maxHarm = 60, double phase = 0.0)
+inline Buf saw (double fs, double seconds, double f, double amp, int maxHarm = 400, double phase = 0.0)
 {
     Buf b ((size_t) std::lround (fs * seconds), 0.0f);
     const int H = std::min (maxHarm, (int) (0.45 * fs / f));

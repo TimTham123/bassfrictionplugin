@@ -89,6 +89,7 @@ private:
         float shiftCents = 0.0f;   // Retune/Push: current smoothed shift
         float targetCents = 0.0f;  // decided target
         float lastFreq = 0.0f;
+        float lastAmp = 0.0f;
         float loBin = 0.0f, hiBin = 0.0f; // region of the partial in the analysis spectrum
         int bell = -1;             // Track mode bell assignment
         bool seen = false;
@@ -203,9 +204,11 @@ private:
     int nPvReq = 0;
     bool frameIsTransient = false;
 
-    struct WholePair { float fi, ai, li, fj, aj, lj; };
-    static constexpr int kMaxWholePairs = 1024;
-    WholePair wholePairs[kMaxWholePairs] {};
+    struct WholeSeg { float f, a, l; int start, len; };
+    static constexpr int kMaxWholePairs = 2048;
+    WholeSeg wholeSegs[kMaxPartials] {};
+    Partial wholeRef[kMaxWholePairs] {};
+    float wholeRefL[kMaxWholePairs] {};
 
     float wholeTargetCents = 0.0f, wholeCents = 0.0f, wholeDecided = 0.0f;
     float wholeDecidedCost = 0.0f;
