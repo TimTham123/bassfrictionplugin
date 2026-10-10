@@ -1,0 +1,84 @@
+name: Build and test
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-msvc:
+    name: Windows x64 (MSVC)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (Visual Studio, x64)
+        run: cmake -S . -B build -A x64
+
+      - name: Build (Release)
+        run: cmake --build build --config Release --parallel
+
+      - name: Core verification harness
+        run: build\tests\Release\FrictionTests.exe --out build\test_output --renders build\renders --report build\TEST_REPORT_windows.md --allow-perf-fail
+
+      - name: Plugin-level tests
+        run: build\src\plugin\FrictionPluginTests_artefacts\Release\FrictionPluginTests.exe --out build\test_output --renders build\renders --append-report build\TEST_REPORT_windows.md
+
+      - name: Upload plugin binaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Friction-Windows-x64
+          path: |
+            build/src/plugin/Friction_artefacts/Release/VST3/
+            build/src/plugin/Friction_artefacts/Release/Standalone/Friction.exe
+          if-no-files-found: warn
+
+      - name: Upload test report and renders
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Friction-Windows-test-report
+          path: |
+            build/TEST_REPORT_windows.md
+            build/renders/
+          if-no-files-found: warn
+
+  linux:
+    name: Linux x64 (GCC)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install JUCE dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build libasound2-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxcomposite-dev libxext-dev libfreetype-dev libfontconfig1-dev \
+            libgl-dev fonts-dejavu-core
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Core verification harness
+        run: ./build/tests/FrictionTests --out build/test_output --renders build/renders --report build/TEST_REPORT_linux.md --allow-perf-fail
+
+      - name: Plugin-level tests
+        run: ./build/src/plugin/FrictionPluginTests_artefacts/Release/FrictionPluginTests --out build/test_output --renders build/renders --append-report build/TEST_REPORT_linux.md
+
+      - name: Upload artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Friction-Linux-x64
+          path: |
+            build/src/plugin/Friction_artefacts/Release/VST3/
+            build/src/plugin/Friction_artefacts/Release/Standalone/Friction
+            build/TEST_REPORT_linux.md
+          if-no-files-found: warn

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>

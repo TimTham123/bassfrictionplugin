@@ -108,6 +108,7 @@ int main (int argc, char** argv)
     Context ctx;
     std::string only;
     std::string report = "TEST_REPORT.md";
+    bool allowPerfFail = false; // CI runners differ in speed: report CPU numbers without failing the run
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i];
@@ -117,6 +118,7 @@ int main (int argc, char** argv)
         else if (a == "--quick") ctx.quick = true;
         else if (a == "--only" && i + 1 < argc) only = argv[++i];
         else if (a == "--report" && i + 1 < argc) report = argv[++i];
+        else if (a == "--allow-perf-fail") allowPerfFail = true;
     }
     std::filesystem::create_directories (ctx.outDir);
     if (ctx.renders)
@@ -139,10 +141,15 @@ int main (int argc, char** argv)
             g.fn (ctx);
     const double secs = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
 
-    int fail = 0;
+    int fail = 0, perfFail = 0;
     for (const auto& r : ctx.results)
         if (! r.pass)
-            ++fail;
+        {
+            if (allowPerfFail && r.group == "Performance") ++perfFail;
+            else ++fail;
+        }
+    if (perfFail > 0)
+        ctx.notes.push_back (fmt ("%d performance check(s) over budget on this machine (not counted as failures: --allow-perf-fail).", perfFail));
     writeReport (ctx, report, secs);
     std::printf ("\n%d checks, %d failed. Report: %s\n", (int) ctx.results.size(), fail, report.c_str());
     return fail == 0 ? 0 : 1;
