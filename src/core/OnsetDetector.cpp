@@ -15,9 +15,9 @@ void OnsetDetector::prepare (double sampleRate)
 void OnsetDetector::reset() noexcept
 {
     pos = 0;
-    accFull = accDiff = 0.0;
-    slowFull = slowDiff = 0.0;
-    prevX = 0.0f;
+    accFull = accDiff = accDiff2 = 0.0;
+    slowFull = slowDiff = slowDiff2 = 0.0;
+    prevX = prevX2 = 0.0f;
     count = 0;
     frameStart = 0;
     last = INT64_MIN / 2;
@@ -28,9 +28,12 @@ void OnsetDetector::reset() noexcept
 bool OnsetDetector::push (float x) noexcept
 {
     const double d = (double) x - (double) prevX;
+    const double d2 = (double) x - 2.0 * (double) prevX + (double) prevX2;
+    prevX2 = prevX;
     prevX = x;
     accFull += (double) x * x;
     accDiff += d * d;
+    accDiff2 += d2 * d2;
     ++count;
 
     if (++pos < frameLen)
@@ -38,7 +41,8 @@ bool OnsetDetector::push (float x) noexcept
 
     const double eFull = accFull / frameLen + 1.0e-20;
     const double eDiff = accDiff / frameLen + 1.0e-20;
-    accFull = accDiff = 0.0;
+    const double eDiff2 = accDiff2 / frameLen + 1.0e-20;
+    accFull = accDiff = accDiff2 = 0.0;
     pos = 0;
     const std::int64_t thisFrameStart = frameStart;
     frameStart = count;
@@ -49,9 +53,10 @@ bool OnsetDetector::push (float x) noexcept
         const double fullDb = 10.0 * std::log10 (eFull);
         const double jumpFull = fullDb - 10.0 * std::log10 (slowFull + 1.0e-20);
         const double jumpDiff = 10.0 * std::log10 (eDiff) - 10.0 * std::log10 (slowDiff + 1.0e-20);
+        const double jumpDiff2 = 10.0 * std::log10 (eDiff2) - 10.0 * std::log10 (slowDiff2 + 1.0e-20);
         // full-scale sine has mean square 0.5 -> -3 dB
         const bool loudEnough = fullDb > (double) floorDb;
-        if (loudEnough && (jumpFull > jumpDb || jumpDiff > jumpDb + 3.0)
+        if (loudEnough && (jumpFull > jumpDb || jumpDiff > jumpDb + 3.0 || jumpDiff2 > jumpDb + 6.0)
             && (double) (thisFrameStart - last) > refractorySec * fs)
         {
             onset = true;
@@ -65,8 +70,10 @@ bool OnsetDetector::push (float x) noexcept
 
     slowFull += slowCoeff * (eFull - slowFull);
     slowDiff += slowCoeff * (eDiff - slowDiff);
+    slowDiff2 += slowCoeff * (eDiff2 - slowDiff2);
     if (slowFull < 1.0e-30) slowFull = 0.0;
     if (slowDiff < 1.0e-30) slowDiff = 0.0;
+    if (slowDiff2 < 1.0e-30) slowDiff2 = 0.0;
     return onset;
 }
 

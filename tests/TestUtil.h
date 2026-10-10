@@ -93,7 +93,10 @@ inline void addKick (Buf& dst, double fs, size_t at, const KickParams& k, double
         const double tt = (double) i / fs;
         const double f = k.fEnd + (k.fStart - k.fEnd) * std::exp (-tt / k.dropTau);
         phase += 2.0 * kPi * f / fs;
-        const double env = std::exp (-tt / k.ampTau) * std::min (1.0, tt / 0.001);
+        // smooth end (a truncated tail would be a step discontinuity in the test signal itself)
+        const double tEnd = (double) (n - i) / fs;
+        const double fadeOut = tEnd < 0.03 ? 0.5 - 0.5 * std::cos (kPi * tEnd / 0.03) : 1.0;
+        const double env = std::exp (-tt / k.ampTau) * std::min (1.0, tt / 0.001) * fadeOut;
         double s = k.amp * env * std::sin (phase);
         if (tt < 0.004)
             s += k.click * (1.0 - tt / 0.004) * ((i * 7919u) % 13 < 6 ? 1.0 : -1.0);
@@ -240,6 +243,23 @@ inline Buf bandPass (const Buf& x, double fs, double fLo, double fHi)
     Buf r (x.size());
     for (size_t i = 0; i < x.size(); ++i) r[i] = (float) a[i].real();
     return r;
+}
+
+/** Causal 4th-order Butterworth high-pass (no long-range ringing, unlike the FFT brick-wall filters). */
+inline Buf highPass4 (const Buf& x, double fs, double fc)
+{
+    struct BQ { double b0, b1, b2, a1, a2, z1 = 0, z2 = 0;
+                double run (double v) { const double y = b0 * v + z1; z1 = b1 * v - a1 * y + z2; z2 = b2 * v - a2 * y; return y; } };
+    auto make = [&] (double q)
+    {
+        const double w0 = 2.0 * kPi * fc / fs, c = std::cos (w0), sn = std::sin (w0), al = sn / (2.0 * q), a0 = 1.0 + al;
+        return BQ { (1.0 + c) / 2.0 / a0, -(1.0 + c) / a0, (1.0 + c) / 2.0 / a0, -2.0 * c / a0, (1.0 - al) / a0 };
+    };
+    BQ s1 = make (0.5412), s2 = make (1.3066);
+    Buf y (x.size());
+    for (size_t i = 0; i < x.size(); ++i)
+        y[i] = (float) s2.run (s1.run (x[i]));
+    return y;
 }
 
 /** Frequency of the dominant component in [fLo,fHi] over [a,b) via phase-slope regression. */

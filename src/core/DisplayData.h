@@ -61,6 +61,7 @@ struct DisplayFrame
     bool lfTargetVoiced = false, lfRefVoiced = false;
     float lfTargetF0 = 0.0f, lfRefF0 = 0.0f;
     int synthVoices = 0;
+    float voiceFreq[16] {}, voiceAmp[16] {};
     int latencySamples = 0;
     float cpuLoad = 0.0f;
 };

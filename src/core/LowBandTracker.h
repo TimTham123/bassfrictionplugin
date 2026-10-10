@@ -37,7 +37,8 @@ struct BiquadD
 
 /**
     Time-domain fundamental tracker for tonal low-frequency content (kick body, bass, 808).
-      1. DC blocker + 8th-order Butterworth low-pass (900 Hz), full rate, double precision
+      1. 8th-order Butterworth low-pass (900 Hz), full rate, double precision (no DC blocker: the
+         YIN difference function ignores DC, and a high-pass would delay lock-in after onsets)
       2. decimation by D = round(fs / 4000)
       3. YIN (W = 20 ms, 27.5 .. 420 Hz, threshold 0.15) every 16 decimated samples (~4 ms)
       4. full-rate refinement of the period (5-lag parabola on the full-rate difference function)
@@ -80,7 +81,6 @@ private:
     float harmLimitHz = 250.0f;
 
     BiquadD lpf[4];
-    double hpX1 = 0.0, hpY1 = 0.0, hpR = 0.999;
 
     std::vector<float> full;  // full-rate band-limited ring
     int fullMask = 0;

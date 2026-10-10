@@ -219,7 +219,13 @@ void AdvisorPanel::paint (juce::Graphics& g)
         const int n = fr::AdvisorResult::kN, mid = fr::AdvisorResult::kRange;
         float maxV = 1.0f;
         for (int c = -range; c <= range; ++c)
+        {
             maxV = std::max (maxV, result.curve[mid + c]);
+            if (result.lowValid)
+                maxV = std::max (maxV, result.lowCurve[mid + c]);
+        }
+        juce::Graphics::ScopedSaveState clip (g);
+        g.reduceClipRegion (ca.toNearestInt());
         auto plotCurve = [&] (const float* curve, juce::Colour col)
         {
             juce::Path p;

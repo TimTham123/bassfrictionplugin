@@ -214,6 +214,16 @@ void FrictionMap::paint (juce::Graphics& g)
         }
     }
 
+    // Tension: synthesized voices (orange diamonds)
+    for (int i = 0; i < frame.synthVoices && i < 16; ++i)
+    {
+        const float x = xOf (frame.voiceFreq[i]), y = yOf (fr::gainToDb (frame.voiceAmp[i], -120.0f));
+        juce::Path d;
+        d.addQuadrilateral (x, y - 5.0f, x + 4.0f, y, x, y + 5.0f, x - 4.0f, y);
+        g.setColour (theme::tension);
+        g.fillPath (d);
+    }
+
     // worst clash connector
     const fr::Clash& wc = showSelf ? frame.worstSelf : frame.worst;
     if (wc.valid && wc.roughness > 0.02f)
@@ -258,10 +268,12 @@ void FrictionMap::paint (juce::Graphics& g)
         if (frame.sidechain != 0)
             item (theme::reference, "Reference");
         item (theme::heatHigh, showSelf ? "Self friction" : "Friction");
-        if (frame.mode == 0)
+        if (frame.mode == 0 || frame.latencyMode == 1)
             item (theme::gain, "Cut");
         else if (frame.mode == 1)
             item (theme::shift, "Shift");
+        else
+            item (theme::tension, "Tension voice");
     }
 
     // hover readout

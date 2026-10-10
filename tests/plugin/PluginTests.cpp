@@ -274,56 +274,125 @@ int main (int argc, char** argv)
              "finite output, no blow-up (trim up to +24 dB)");
     }
 
-    // ---- editor: create, feed frames, render screenshots at two sizes
+    // ---- Advisor: Learn -> Stop -> result -> Apply (kick vs bass)
     {
+        const double sr = 48000.0;
         FrictionAudioProcessor p;
-        p.setRateAndBufferSizeDetails (48000.0, 512);
+        p.setRateAndBufferSizeDetails (sr, 512);
+        p.prepareToPlay (sr, 512);
+        ft::KickParams kp;
+        ft::Buf kick ((size_t) (8.0 * sr), 0.0f), bass ((size_t) (8.0 * sr), 0.0f);
+        for (double h = 0.05; h < 7.4; h += 0.5)
+            ft::addKick (kick, sr, (size_t) (h * sr), kp);
+        double ph = 0.0;
+        for (size_t n = 0; n < bass.size(); ++n)
+        {
+            const double t = (double) n / sr;
+            const double f = (int) t % 2 == 0 ? 55.0 : 65.406;
+            ph += 2.0 * ft::kPi * f / sr;
+            bass[n] = (float) (0.35 * std::sin (ph));
+        }
+        p.setLearning (true);
+        run (p, { kick, kick }, { bass, bass }, 512);
+        p.setLearning (false);
+        double secs = 0.0;
+        bool fin = false;
+        fr::AdvisorResult r;
+        for (int i = 0; i < 300 && ! fin; ++i)
+        {
+            juce::Thread::sleep (20);
+            if (p.advisor().hasResult())
+                r = p.advisor().getResult (secs, fin);
+        }
+        const bool applied = p.applyAdvisorOffset (true);
+        auto& st = p.state();
+        const float mode = st.getRawParameterValue (friction::ids::mode)->load();
+        const float style = st.getRawParameterValue (friction::ids::retuneStyle)->load();
+        const float off = st.getRawParameterValue (friction::ids::wholeOffset)->load();
+        const float amt = st.getRawParameterValue (friction::ids::amount)->load();
+        const bool ok = fin && r.lowValid && applied && mode > 0.5f && mode < 1.5f && style > 1.5f
+                        && std::abs (off - r.lowBestCents) < 0.11f && std::abs (amt - 100.0f) < 0.01f;
+        add (ok, "Advisor: Learn -> Stop -> Apply sets Retune Whole Fixed",
+             fmt ("learned %.1f s, best low-band offset %+.0f c, kick %.1f Hz -> %.1f Hz", secs, r.lowBestCents, r.kickF0, r.kickNewF0)
+                 + fmt ("; applied: offset %+.1f c, mode %.0f, style %.0f, amount %.0f %%", off, mode, style, amt),
+             "final result, parameters set to Retune / Whole Fixed / offset / 100 %");
+    }
+
+    // ---- editor: create, feed frames, render screenshots in every mode and at two sizes
+    {
+        const double sr = 48000.0;
+        FrictionAudioProcessor p;
+        p.setRateAndBufferSizeDetails (sr, 512);
         setParam (p, friction::ids::amount, 80.0f);
         setParam (p, friction::ids::sensitivity, 75.0f);
-        p.prepareToPlay (48000.0, 512);
+        p.prepareToPlay (sr, 512);
         std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditorAndMakeActive());
         bool ok = ed != nullptr;
+        int shots = 0;
         if (ok)
         {
             auto* fe = dynamic_cast<friction::FrictionAudioProcessorEditor*> (ed.get());
-            const double sr = 48000.0;
-            // piano-ish detuned tone vs pad, plus low kick/bass content
-            ft::Buf tgt = ft::harmonic (sr, 3.0, 220.0 * std::pow (2.0, 18.0 / 1200.0), { 0.25, 0.18, 0.12, 0.08, 0.05, 0.04, 0.03 }, 0.0002);
-            ft::Buf pad = ft::saw (sr, 3.0, 220.0, 0.12);
-            ft::addInto (pad, ft::saw (sr, 3.0, 277.18, 0.08));
-            ft::addInto (tgt, ft::sine (sr, 3.0, 52.0, 0.3));
-            ft::addInto (pad, ft::sine (sr, 3.0, 55.0, 0.3));
-            std::vector<ft::Buf> t (2, tgt), s (2, pad);
-            const int block = 512;
-            juce::AudioBuffer<float> buf (4, block);
-            juce::MidiBuffer midi;
-            for (int pos = 0; pos + block <= (int) tgt.size(); pos += block)
+            // piano-ish detuned part vs pad, plus a low kick/bass clash
+            ft::Buf tgt = ft::harmonic (sr, 4.0, 220.0 * std::pow (2.0, 18.0 / 1200.0), { 0.25, 0.18, 0.12, 0.08, 0.05, 0.04, 0.03 }, 0.0002);
+            ft::Buf pad = ft::saw (sr, 4.0, 220.0, 0.12);
+            ft::addInto (pad, ft::saw (sr, 4.0, 277.18, 0.08));
+            ft::addInto (tgt, ft::sine (sr, 4.0, 52.0, 0.3));
+            ft::addInto (pad, ft::sine (sr, 4.0, 55.0, 0.3));
+            auto feed = [&] (double seconds)
             {
-                buf.clear();
-                for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, t[(size_t) c].data() + pos, block);
-                for (int c = 0; c < 2; ++c) buf.copyFrom (2 + c, 0, s[(size_t) c].data() + pos, block);
-                p.processBlock (buf, midi);
-                if ((pos / block) % 3 == 0 && fe != nullptr)
-                    fe->refreshNow();
-            }
-            int shots = 0;
-            for (auto size : { juce::Point<int> (1080, 700), juce::Point<int> (900, 580) })
+                const int block = 512;
+                juce::AudioBuffer<float> buf (4, block);
+                juce::MidiBuffer midi;
+                const int n = (int) (seconds * sr);
+                for (int pos = 0; pos + block <= n; pos += block)
+                {
+                    const int src = pos % ((int) tgt.size() - block);
+                    buf.clear();
+                    for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, tgt.data() + src, block);
+                    for (int c = 0; c < 2; ++c) buf.copyFrom (2 + c, 0, pad.data() + src, block);
+                    p.processBlock (buf, midi);
+                    if ((pos / block) % 3 == 0 && fe != nullptr)
+                        fe->refreshNow();
+                }
+                p.syncLatency();
+            };
+            auto shoot = [&] (const juce::String& name, int w, int h)
             {
-                ed->setSize (size.x, size.y);
+                ed->setSize (w, h);
                 if (fe != nullptr) fe->refreshNow();
                 juce::Image img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
-                juce::File f (juce::String (renderDir) + "/ui_" + juce::String (size.x) + "x" + juce::String (size.y) + ".png");
+                juce::File f (juce::String (renderDir) + "/" + name);
                 f.deleteFile();
                 juce::FileOutputStream os (f);
                 juce::PNGImageFormat png;
                 if (os.openedOk() && png.writeImageToStream (img, os))
                     ++shots;
-            }
-            ok = shots == 2;
+            };
+            // Learn during the Smooth run so the Advisor panel shows a result
+            p.setLearning (true);
+            feed (4.0);
+            p.setLearning (false);
+            for (int i = 0; i < 100 && ! p.advisor().hasResult(); ++i) juce::Thread::sleep (20);
+            juce::Thread::sleep (100);
+            feed (0.5);
+            shoot ("ui_smooth_1080x700.png", 1080, 700);
+            shoot ("ui_smooth_900x580.png", 900, 580);
+            setParam (p, friction::ids::mode, 1.0f);
+            setParam (p, friction::ids::retuneStyle, 0.0f);
+            feed (3.0);
+            shoot ("ui_retune_partial_1080x700.png", 1080, 700);
+            setParam (p, friction::ids::mode, 2.0f);
+            feed (3.0);
+            shoot ("ui_tension_1080x700.png", 1080, 700);
+            setParam (p, friction::ids::mode, 0.0f);
+            setParam (p, friction::ids::latency, 1.0f);
+            feed (3.0);
+            shoot ("ui_track_1080x700.png", 1080, 700);
+            ok = shots == 5;
         }
         ed.reset();
-        add (ok, "Editor opens, resizes and renders (PNG snapshots)", ok ? "renders/ui_1080x700.png, renders/ui_900x580.png" : "failed",
-             "no crash, 2 snapshots written");
+        add (ok, "Editor renders in every mode and resizes (PNG snapshots)", fmt ("%.0f snapshots in renders/ui_*.png", shots),
+             "no crash, 5 snapshots written");
     }
 
     int fails = 0;
@@ -333,8 +402,9 @@ int main (int argc, char** argv)
     {
         std::ofstream f (appendReport, std::ios::app);
         f << "\n## Plugin (JUCE AudioProcessor / editor)\n\n| Result | Check | Measured | Criterion |\n|---|---|---|---|\n";
+        auto esc = [] (const std::string& s) { std::string e; for (char ch : s) { if (ch == '|') e += '\\'; e += ch; } return e; };
         for (const auto& r : rows)
-            f << "| " << (r.pass ? "PASS" : "**FAIL**") << " | " << r.name << " | " << r.measured << " | " << r.criterion << " |\n";
+            f << "| " << (r.pass ? "PASS" : "**FAIL**") << " | " << esc (r.name) << " | " << esc (r.measured) << " | " << esc (r.criterion) << " |\n";
     }
     std::printf ("\nPlugin tests: %d checks, %d failed\n", (int) rows.size(), fails);
     return fails == 0 ? 0 : 1;

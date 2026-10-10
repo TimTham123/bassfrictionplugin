@@ -297,6 +297,39 @@ void ft::testsAnalysis (Context& ctx)
                  pass, meas, "|meas - theory| <= 0.02 + 5%, rising to ~25 Hz, falling at 100 Hz");
     }
 
+    // low-band cross-check: a 52 Hz sine under a 222 Hz harmonic tone (YIN alone locks to 55.6 Hz)
+    {
+        const double fs2 = 48000.0;
+        Buf t = harmonic (fs2, 3.0, 222.3, { 0.25, 0.18, 0.12, 0.08, 0.05, 0.04, 0.03 });
+        addInto (t, sine (fs2, 3.0, 52.0, 0.3));
+        Buf r = sine (fs2, 3.0, 55.0, 0.3);
+        fr::Params p;
+        p.amount = 0.0f;
+        auto eng = makeEngine (fs2, 512, 1, p);
+        double worst = 0.0;
+        int frames = 0, last = -1;
+        bool wrong = false;
+        RunOptions o;
+        o.afterBlock = [&] (std::int64_t pos, fr::FrictionEngine& e)
+        {
+            const auto& pr = e.probe();
+            if (pr.frames == last || (double) pos < 1.0 * fs2) return;
+            last = pr.frames;
+            ++frames;
+            double bestD = 1e9;
+            for (int i = 0; i < pr.nT; ++i)
+            {
+                bestD = std::min (bestD, std::abs ((double) pr.T[i].freq - 52.0));
+                if (std::abs (pr.T[i].freq - 55.58f) < 1.0f) wrong = true;
+            }
+            worst = std::max (worst, bestD);
+        };
+        runEngine (*eng, Chans { t }, Chans { r }, o);
+        ctx.add ("Analysis", "Low-band cross-check: 52 Hz sine under a 222 Hz tone", worst < 0.1 && ! wrong,
+                 fmt ("52 Hz partial found within %.3f Hz in %d frames; subharmonic 55.6 Hz reported: %s", worst, frames, wrong ? "yes" : "no"),
+                 "52 Hz within 0.1 Hz, no false 55.6 Hz partial");
+    }
+
     // sample-rate independence of the friction measurement
     {
         std::string meas;

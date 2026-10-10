@@ -92,7 +92,8 @@ static void writeReport (const Context& ctx, const std::string& path, double sec
             group = r.group;
             f << "\n## " << group << "\n\n| Result | Check | Measured | Criterion |\n|---|---|---|---|\n";
         }
-        auto esc = [] (std::string s) { for (auto& ch : s) if (ch == '|') ch = '/'; return s; };
+        // a literal '|' inside a markdown table cell must be escaped
+        auto esc = [] (const std::string& s) { std::string r; for (char ch : s) { if (ch == '|') r += '\\'; r += ch; } return r; };
         f << "| " << (r.pass ? "PASS" : "**FAIL**") << " | " << esc (r.name) << " | " << esc (r.measured) << " | " << esc (r.criterion) << " |\n";
     }
     if (! ctx.notes.empty())

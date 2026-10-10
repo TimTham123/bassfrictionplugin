@@ -149,20 +149,29 @@ void WholeShifter::controlTick (std::int64_t t, const OnsetDetector& onsets) noe
     const double driftHard = std::min (driftHardSec * fs, 0.45 * latency);
     const std::int64_t newestAvail = t - 1;
 
-    // 1) onset alignment: splice to exactly nominal before an upcoming onset
-    const std::int64_t u = onsets.nextOnsetAfter ((std::int64_t) std::floor (posA));
+    // 1) onset alignment. The splice is started as late as possible before the onset and its target is
+    //    pre-compensated for the drift that accumulates until the onset, so the hit is output exactly at
+    //    its nominal (latency-compensated) time. No routine splice may start when an onset is near.
+    const std::int64_t u = onsets.nextOnsetAfter ((std::int64_t) std::floor (std::min (posA, nominal)));
     if (u != INT64_MAX)
     {
-        const double untilRead = ((double) u - posA) / std::max (0.25, ratio);
-        if (untilRead < onsetLookSec * fs && std::abs (drift) > 0.0005 * fs)
+        const double untilA = ((double) u - posA) / std::max (0.25, ratio);   // head A reaches the onset
+        const double untilNom = (double) u - nominal;                           // onset's nominal output time
+        const double until = std::min (untilA, untilNom);
+        const double margin = 0.001 * fs;
+        if (until < 2.0 * xfDefault + 4.0 * margin)
         {
-            const int len = (int) std::min ((double) xfDefault, untilRead - 0.001 * fs);
-            if (len >= (int) (0.002 * fs))
+            const double targetDrift = -(ratio - 1.0) * untilNom;   // drift at splice time -> 0 at the onset
+            if (std::abs (drift - targetDrift) > 0.0003 * fs && until <= (double) xfDefault + 2.0 * margin)
             {
-                startSplice (nominal, len, false);
-                lastSpliceT = t;
-                return;
+                const int len = (int) (until - margin);
+                if (len >= (int) (0.002 * fs))
+                {
+                    startSplice (nominal + targetDrift, len, false);
+                    lastSpliceT = t;
+                }
             }
+            return; // near an onset: wait for (or skip) the alignment splice
         }
     }
 

@@ -179,6 +179,13 @@ private:
     Clash worstCross, worstSelf;
     LfEstimate lastLfT, lastLfR;
     SlotState lfSlots[kLfHarmonics];
+    float lfCorrT[kLfHarmonics] {}, lfCorrR[kLfHarmonics] {}; // STFT frequency correction ratios (0 = none)
+    float lfCorrF0T = 0.0f, lfCorrF0R = 0.0f;                  // low-band f0 the ratios were measured at
+    /** Correction ratio for harmonic k, valid only while the tracker stays on the same note (+-3 %). */
+    static float lfCorrFor (const float* ratios, float baseF0, float f0, int k) noexcept
+    {
+        return (ratios[k] > 0.0f && baseF0 > 0.0f && std::abs (f0 - baseF0) < 0.03f * baseF0) ? ratios[k] : 1.0f;
+    }
 
     bool selfMode = false;
     bool sidechainPresentNow = false;
@@ -226,6 +233,8 @@ private:
     float paramAlpha = 0.01f;
     float wetFade = 1.0f;
     float outFade = 1.0f;
+    float preMask = 1.0f, preMaskTarget = 1.0f, preMaskStep = 0.01f;
+    static constexpr double preEchoSec = 0.025;
     bool modeTransition = false;
     bool latencyTransition = false;
     float fadeStep = 0.01f;

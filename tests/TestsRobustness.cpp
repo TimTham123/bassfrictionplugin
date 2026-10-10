@@ -228,6 +228,39 @@ void ft::testsRobustness (Context& ctx)
         ctx.add ("Robustness", "Stereo linked: R = 0.5 L stays 0.5 L after processing", ok, meas, "max |R - 0.5 L| <= 1e-5");
     }
 
+    // ---- live switching of mode / style / latency / delta: no clicks
+    {
+        const double secs = 8.0;
+        Buf t = sine (fs, secs, 220.0 * std::pow (2.0, 10.0 / 1200.0), 0.5);
+        Buf r = sine (fs, secs, 220.0, 0.5);
+        fr::Params p0;
+        p0.amount = 1.0f;
+        p0.sensitivity = 0.9f;
+        auto e = makeEngine (fs, 256, 1, p0);
+        RunOptions o;
+        o.block = 256;
+        o.beforeBlock = [&] (std::int64_t pos, fr::Params& q)
+        {
+            const int phase = (int) ((double) pos / fs / 0.5);
+            q.mode = (fr::Mode) (phase % 3);
+            q.retuneStyle = (phase / 3) % 2 ? fr::RetuneStyle::WholeAuto : fr::RetuneStyle::PerPartial;
+            q.latencyMode = (phase % 7 == 6) ? fr::LatencyMode::Track : fr::LatencyMode::Mix;
+            q.delta = phase % 5 == 4;
+        };
+        Chans out = runEngine (*e, Chans { t }, Chans { r }, o);
+        const Buf hf = bandPass (out[0], fs, 6000.0, 23000.0);
+        const double outRms = rms (out[0], (size_t) fs, out[0].size());
+        double worst = 0.0, at = 0.0;
+        for (size_t i = (size_t) (0.2 * fs); i + 240 < hf.size(); i += 120)
+        {
+            const double v = rms (hf, i, i + 240);
+            if (v > worst) { worst = v; at = (double) i / fs; }
+        }
+        ctx.add ("Robustness", "Live switching (mode, style, latency, delta every 0.5 s): no clicks", db (worst / outRms) < -40.0 && allFinite (out[0]),
+                 fmt ("worst 5 ms burst above 6 kHz %.1f dB re output RMS (at %.2f s) on a 226 Hz sine", db (worst / outRms), at),
+                 "< -40 dB (fades are 10 ms raised-cosine)");
+    }
+
     // ---- hot input
     {
         const double secs = 3.0;

@@ -33,7 +33,6 @@ void LowBandTracker::prepare (double sampleRate)
     const double fc = std::min (900.0, 0.4 * fsd);
     for (int i = 0; i < 4; ++i)
         lpf[i].setLowpass (fc, qs[i], fs);
-    hpR = 1.0 - kTwoPi * 10.0 / fs;
 
     const int fullSize = nextPow2 ((W + tauMax + 8) * D + 256);
     full.assign ((size_t) fullSize, 0.0f);
@@ -54,7 +53,6 @@ void LowBandTracker::reset() noexcept
 {
     for (auto& b : lpf)
         b.reset();
-    hpX1 = hpY1 = 0.0;
     std::fill (full.begin(), full.end(), 0.0f);
     std::fill (dec.begin(), dec.end(), 0.0f);
     fullCount = decCount = 0;

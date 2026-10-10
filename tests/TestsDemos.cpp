@@ -32,12 +32,44 @@ void addPianoNote (Buf& dst, double fs, size_t at, double f0, double amp, double
         for (size_t i = 0; i < n && at + i < dst.size(); ++i)
         {
             const double t = (double) i / fs;
-            const double env = std::exp (-t / tau) * std::min (1.0, t / 0.003);
+            const double tEnd = (double) (n - i) / fs;
+            const double fadeOut = tEnd < 0.05 ? 0.5 - 0.5 * std::cos (kPi * tEnd / 0.05) : 1.0; // no step at the end
+            const double env = std::exp (-t / tau) * std::min (1.0, t / 0.003) * fadeOut;
             dst[at + i] += (float) (ak * env * std::sin (2.0 * kPi * fk * t + ph));
         }
     }
     for (size_t i = 0; i < (size_t) (0.01 * fs) && at + i < dst.size(); ++i)
         dst[at + i] += (float) (0.05 * amp * u (rng) * std::exp (-(double) i / (0.002 * fs)));
+}
+
+/** Worst 5 ms window where the output has more energy above 6 kHz than the input had in any 5 ms window
+    starting within +-2 ms of it (dB). Clicks, splice artefacts and STFT pre-echo (which spreads up to a
+    window length before an onset) show up here; sub-millisecond timing differences of the whole-signal
+    shifter (onset alignment tolerance 0.3 ms, interpolator pre-ringing 0.33 ms) do not. */
+double addedHfDb (const Buf& in, const Buf& out, double fs)
+{
+    const Buf hi = highPass4 (in, fs, 6000.0), ho = highPass4 (out, fs, 6000.0);
+    const double floorRms = std::max (1e-6, rms (in) * 1e-3); // ignore windows 60 dB below the signal
+    const size_t w = (size_t) (0.005 * fs), step = (size_t) (0.0005 * fs);
+    const int tol = 4; // steps of 0.5 ms
+    std::vector<double> inR, outR;
+    for (size_t i = 0; i + w <= in.size(); i += step)
+    {
+        inR.push_back (rms (hi, i, i + w));
+        outR.push_back (rms (ho, i, i + w));
+    }
+    double worst = -300.0;
+    for (int k = 0; k < (int) inR.size(); ++k)
+    {
+        const size_t i = (size_t) k * step;
+        if (i < (size_t) fs || i + w >= in.size() - (size_t) (0.2 * fs))
+            continue;
+        double a = floorRms;
+        for (int j = std::max (0, k - tol); j <= std::min ((int) inR.size() - 1, k + tol); ++j)
+            a = std::max (a, inR[(size_t) j]);
+        worst = std::max (worst, db (outR[(size_t) k] / a));
+    }
+    return worst;
 }
 
 /** Total friction of a rendered target against the reference, averaged over the run (analysis only). */
@@ -97,7 +129,7 @@ void ft::testsDemos (Context& ctx)
             }
         }
         const double fBefore = meanFriction (fs, piano, pad);
-        ctx.wav ("demo1_piano_vs_pad_before.wav", { mixOf (piano, pad), mixOf (piano, pad) }, fs);
+        ctx.wav ("demo1_piano_vs_pad_before.wav", { mixOf (piano, pad) }, fs, 0.0, 10.0);
         std::string meas = fmt ("mean friction before %.2f; ", fBefore);
         struct V { const char* name; const char* file; fr::Mode m; fr::RetuneStyle rs; };
         const V variants[] = { { "Smooth", "demo1_piano_vs_pad_after_smooth.wav", fr::Mode::Smooth, fr::RetuneStyle::PerPartial },
@@ -117,11 +149,13 @@ void ft::testsDemos (Context& ctx)
             Chans o = runEngine (*e, Chans { piano }, Chans { pad }, RunOptions());
             const Buf al = alignOut (o[0], e->currentLatency());
             const double fAfter = meanFriction (fs, al, pad);
-            ctx.wav (v.file, { mixOf (al, pad), mixOf (al, pad) }, fs);
-            meas += fmt ("%s: %.2f (%.0f %%); ", v.name, fAfter, 100.0 * (fAfter - fBefore) / fBefore);
-            if (! (fAfter < fBefore)) ok = false;
+            const double hf = addedHfDb (piano, al, fs);
+            ctx.wav (v.file, { mixOf (al, pad) }, fs, 0.0, 10.0);
+            meas += fmt ("%s: %.2f (%.0f %%), added HF worst %+.1f dB; ", v.name, fAfter, 100.0 * (fAfter - fBefore) / fBefore, hf);
+            if (! (fAfter < fBefore) || hf > 3.0) ok = false;
         }
-        ctx.add ("Demos", "Demo 1: piano-like part (+18 c) vs pad", ok, meas, "friction reduced by every mode (renders/demo1_*.wav)");
+        ctx.add ("Demos", "Demo 1: piano-like part (+18 c) vs pad", ok, meas,
+                 "friction reduced by every mode, no added HF bursts > +3 dB (5 ms windows, +-2 ms timing tolerance; renders/demo1_*.wav)");
     }
 
     // ------------------------------------------------ demo 2: kick vs bass, Smooth and Advisor-guided kick retune
@@ -144,7 +178,7 @@ void ft::testsDemos (Context& ctx)
             bass[n] = (float) (env * (0.35 * std::sin (ph1) + 0.12 * std::sin (ph2)));
         }
         const double fBefore = meanFriction (fs, kick, bass);
-        ctx.wav ("demo2_kick_vs_bass_before.wav", { mixOf (kick, bass), mixOf (kick, bass) }, fs);
+        ctx.wav ("demo2_kick_vs_bass_before.wav", { mixOf (kick, bass) }, fs, 0.0, 8.0);
 
         // Smooth, Focus Low
         fr::Params p;
@@ -157,7 +191,7 @@ void ft::testsDemos (Context& ctx)
         Chans o = runEngine (*e, Chans { kick }, Chans { bass }, RunOptions());
         const Buf sm = alignOut (o[0], e->currentLatency());
         const double fSmooth = meanFriction (fs, sm, bass);
-        ctx.wav ("demo2_kick_vs_bass_after_smooth.wav", { mixOf (sm, bass), mixOf (sm, bass) }, fs);
+        ctx.wav ("demo2_kick_vs_bass_after_smooth.wav", { mixOf (sm, bass) }, fs, 0.0, 8.0);
 
         // Advisor: learn, then apply the low-band offset as Whole Fixed retune of the kick
         fr::Params pl;
@@ -183,10 +217,12 @@ void ft::testsDemos (Context& ctx)
         Chans o2 = runEngine (*er, Chans { kick }, Chans { bass }, RunOptions());
         const Buf rt = alignOut (o2[0], er->currentLatency());
         const double fRetune = meanFriction (fs, rt, bass);
-        ctx.wav ("demo2_kick_vs_bass_after_advisor_retune.wav", { mixOf (rt, bass), mixOf (rt, bass) }, fs);
-        ctx.add ("Demos", "Demo 2: kick (52 Hz) vs bass line", fSmooth < fBefore && fRetune < fBefore,
+        ctx.wav ("demo2_kick_vs_bass_after_advisor_retune.wav", { mixOf (rt, bass) }, fs, 0.0, 8.0);
+        const double hfS = addedHfDb (kick, sm, fs), hfR = addedHfDb (kick, rt, fs);
+        ctx.add ("Demos", "Demo 2: kick (52 Hz) vs bass line", fSmooth < fBefore && fRetune < fBefore && hfS <= 3.0 && hfR <= 3.0,
                  fmt ("mean friction before %.3f; Smooth (Focus Low) %.3f (%.0f %%); Advisor offset %+.0f c applied as Whole Fixed: %.3f (%.0f %%)",
-                      fBefore, fSmooth, 100.0 * (fSmooth - fBefore) / fBefore, res.lowBestCents, fRetune, 100.0 * (fRetune - fBefore) / fBefore),
-                 "friction reduced (renders/demo2_*.wav)");
+                      fBefore, fSmooth, 100.0 * (fSmooth - fBefore) / fBefore, res.lowBestCents, fRetune, 100.0 * (fRetune - fBefore) / fBefore)
+                     + fmt ("; added HF worst: Smooth %+.1f dB, Retune %+.1f dB", hfS, hfR),
+                 "friction reduced, no added HF bursts > +3 dB (5 ms windows, +-2 ms timing tolerance; renders/demo2_*.wav)");
     }
 }

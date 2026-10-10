@@ -26,6 +26,19 @@ int SynthBank::activeVoices() const noexcept
     return n;
 }
 
+int SynthBank::snapshot (float* freq, float* amp, int maxVoices) const noexcept
+{
+    int n = 0;
+    for (const auto& v : voices)
+        if (v.used && n < maxVoices && v.a > 1.0e-5f)
+        {
+            freq[n] = v.f;
+            amp[n] = v.a;
+            ++n;
+        }
+    return n;
+}
+
 void SynthBank::setTargets (const VoiceTarget* t, int n, int rampSamples, int fadeSamples) noexcept
 {
     rampSamples = std::max (1, rampSamples);

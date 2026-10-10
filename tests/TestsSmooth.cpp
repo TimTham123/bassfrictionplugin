@@ -210,10 +210,10 @@ void ft::testsSmooth (Context& ctx)
                  "mean <= -6 dB (Amount 100 %, Sensitivity 80 %)");
         if (lm == fr::LatencyMode::Mix)
         {
-            ctx.wav ("smooth_saws_before_mix.wav", { before }, fs);
-            ctx.wav ("smooth_saws_after_mix.wav", { after }, fs);
-            ctx.wav ("smooth_saws_target_before.wav", { tgt }, fs);
-            ctx.wav ("smooth_saws_target_after.wav", { align (out[0], lat) }, fs);
+            ctx.wav ("smooth_saws_before_mix.wav", { before }, fs, 3.0);
+            ctx.wav ("smooth_saws_after_mix.wav", { after }, fs, 3.0);
+            ctx.wav ("smooth_saws_target_before.wav", { tgt }, fs, 3.0);
+            ctx.wav ("smooth_saws_target_after.wav", { align (out[0], lat) }, fs, 3.0);
         }
     }
 
@@ -233,8 +233,8 @@ void ft::testsSmooth (Context& ctx)
         const double ch = db (std::max (d1, 1e-6) / d0);
         ctx.add ("Smooth", "Low band: 55 vs 57.2 Hz beating reduced (bells)", ch <= -6.0,
                  fmt ("modulation depth 35-80 Hz: %.3f -> %.3f (%.1f dB)", d0, d1, ch), "<= -6 dB");
-        ctx.wav ("smooth_lowband_before_mix.wav", { b0 }, fs);
-        ctx.wav ("smooth_lowband_after_mix.wav", { b1 }, fs);
+        ctx.wav ("smooth_lowband_before_mix.wav", { b0 }, fs, 3.0);
+        ctx.wav ("smooth_lowband_after_mix.wav", { b1 }, fs, 3.0);
     }
 
     // ---- transparency where friction is low: a partial far from any reference partial is untouched

@@ -37,7 +37,7 @@ void addDrum (Buf& dst, double fs, size_t at, double bodyHz)
     }
 }
 
-struct TransientReport { double preEchoDb = 0.0, attackDb = 0.0, worstPre = -300.0; };
+struct TransientReport { double preEchoDb = 0.0, attackDb = 0.0, worstPre = -300.0, attackHfDb = 0.0; };
 
 /** Pre-echo (energy 25..2 ms before each onset re onset peak) and attack energy change vs the input. */
 TransientReport transientCheck (const Buf& in, const Buf& out, double fs, const std::vector<size_t>& onsets)
@@ -56,6 +56,12 @@ TransientReport transientCheck (const Buf& in, const Buf& out, double fs, const 
         r.worstPre = std::max (r.worstPre, preRel);
         accAtt += db (attOut / peakIn);
     }
+    // attack energy above 2 kHz (click / noise of the hit), which no mode should change
+    const Buf hiIn = highPass4 (in, fs, 2000.0), hiOut = highPass4 (out, fs, 2000.0);
+    double accHf = 0.0;
+    for (size_t on : onsets)
+        accHf += db (rms (hiOut, on, on + (size_t) (0.006 * fs)) / rms (hiIn, on, on + (size_t) (0.006 * fs)));
+    r.attackHfDb = accHf / (double) onsets.size();
     r.preEchoDb = accPre / (double) onsets.size();
     r.attackDb = accAtt / (double) onsets.size();
     return r;
@@ -104,12 +110,12 @@ void ft::testsRetune (Context& ctx)
                  "beat rate < 0.05 Hz per harmonic order (from 1.02 Hz)");
         if (style == 0)
         {
-            ctx.wav ("retune_whole_saws_before_mix.wav", { mixOf (tgt, ref) }, fs);
-            ctx.wav ("retune_whole_saws_after_mix.wav", { mixOf (o, ref) }, fs);
+            ctx.wav ("retune_whole_saws_before_mix.wav", { mixOf (tgt, ref) }, fs, 3.0);
+            ctx.wav ("retune_whole_saws_after_mix.wav", { mixOf (o, ref) }, fs, 3.0);
         }
         else
         {
-            ctx.wav ("retune_partial_saws_after_mix.wav", { mixOf (o, ref) }, fs);
+            ctx.wav ("retune_partial_saws_after_mix.wav", { mixOf (o, ref) }, fs, 3.0);
         }
     }
 
@@ -148,10 +154,10 @@ void ft::testsRetune (Context& ctx)
         }
         // reference tone near the drum body so Retune engages
         Buf r = harmonic (fs, secs, 186.0, { 0.3, 0.1 });
-        for (int style = 0; style < 2; ++style)
+        for (int style = 0; style < 3; ++style)
         {
             fr::Params p;
-            p.mode = fr::Mode::Retune;
+            p.mode = style == 2 ? fr::Mode::Smooth : fr::Mode::Retune;
             p.retuneStyle = style == 0 ? fr::RetuneStyle::PerPartial : fr::RetuneStyle::WholeFixed;
             p.wholeOffsetCents = 40.0f;
             p.amount = 1.0f;
@@ -165,15 +171,24 @@ void ft::testsRetune (Context& ctx)
             std::vector<size_t> on2 (onsets.begin() + 2, onsets.end());
             const auto tIn = transientCheck (drums, drums, fs, on2);
             const auto tOut = transientCheck (drums, o, fs, on2);
-            const bool ok = tOut.worstPre < -40.0 && std::abs (tOut.attackDb - tIn.attackDb) < 1.5;
-            ctx.add ("Retune artifacts", style == 0 ? "Per-partial: no transient smearing on drum hits" : "Whole (fixed +40 c): no transient smearing on drum hits", ok,
-                     fmt ("pre-echo (25-2 ms before hit) mean %.1f dB / worst %.1f dB re hit (input %.1f dB); attack energy change %.2f dB",
-                          tOut.preEchoDb, tOut.worstPre, tIn.preEchoDb, tOut.attackDb - tIn.attackDb),
-                     "worst pre-echo < -40 dB re hit, attack within 1.5 dB");
+            // Smooth legitimately cuts the clashing drum body, so for it the attack check uses the >2 kHz part
+            const double attackChange = style == 2 ? tOut.attackHfDb : tOut.attackDb - tIn.attackDb;
+            const bool ok = tOut.worstPre < -40.0 && std::abs (attackChange) < 1.5;
+            ctx.add ("Retune artifacts", style == 0 ? "Per-partial: no transient smearing on drum hits"
+                                         : (style == 1 ? "Whole (fixed +40 c): no transient smearing on drum hits"
+                                                       : "Smooth: no pre-echo on drum hits"), ok,
+                     fmt ("pre-echo (25-2 ms before hit) mean %.1f dB / worst %.1f dB re hit (input %.1f dB); attack energy change %.2f dB (above 2 kHz %.2f dB)",
+                          tOut.preEchoDb, tOut.worstPre, tIn.preEchoDb, tOut.attackDb - tIn.attackDb, tOut.attackHfDb),
+                     style == 2 ? "worst pre-echo < -40 dB re hit, attack above 2 kHz within 1.5 dB (body cut is intended)"
+                                : "worst pre-echo < -40 dB re hit, attack within 1.5 dB");
             if (style == 0)
             {
                 ctx.wav ("retune_drums_before.wav", { drums }, fs);
                 ctx.wav ("retune_drums_after_partial.wav", { o }, fs);
+            }
+            else if (style == 2)
+            {
+                ctx.wav ("smooth_drums_after.wav", { o }, fs);
             }
             else
             {

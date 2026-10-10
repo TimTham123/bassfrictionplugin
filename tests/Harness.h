@@ -37,10 +37,20 @@ struct Context
         std::printf ("[%s] %-46s %s | %s\n", pass ? "PASS" : "FAIL", (group + ": " + name).c_str(), measured.c_str(), criterion.c_str());
         std::fflush (stdout);
     }
-    void wav (const std::string& file, const std::vector<Buf>& ch, double fs)
+    /** Writes an excerpt [fromSec, fromSec + maxSec) of the given channels as 16-bit WAV. */
+    void wav (const std::string& file, const std::vector<Buf>& ch, double fs, double fromSec = 1.0, double maxSec = 4.0)
     {
-        if (renders)
-            writeWav (renderDir + "/" + file, ch, fs, 16);
+        if (! renders || ch.empty())
+            return;
+        const size_t n = ch[0].size();
+        size_t a = (size_t) (fromSec * fs);
+        if (a + (size_t) (maxSec * fs) > n)
+            a = n > (size_t) (maxSec * fs) ? n - (size_t) (maxSec * fs) : 0;
+        const size_t b = std::min (n, a + (size_t) (maxSec * fs));
+        std::vector<Buf> ex;
+        for (const auto& c : ch)
+            ex.emplace_back (c.begin() + (long) a, c.begin() + (long) b);
+        writeWav (renderDir + "/" + file, ex, fs, 16);
     }
 };
 

@@ -8,8 +8,10 @@ namespace fr
 
 /**
     Detects energy onsets on a mono signal with ~1 ms precision.
-    An onset is declared when the frame energy (broadband or first-difference / HF-weighted)
-    jumps more than `jumpDb` above a slow running average and exceeds `floorDb`.
+    An onset is declared when the frame energy jumps above its slow running average by more than
+    `jumpDb` (broadband), `jumpDb + 3` (first difference, +6 dB/oct) or `jumpDb + 6` (second difference,
+    +12 dB/oct; catches soft onsets whose new energy is mostly high-frequency, e.g. a quiet hammer or
+    pick noise over a ringing chord) and the frame level exceeds `floorDb`.
     Onset times are full-rate input sample indices (start of the triggering frame).
 */
 class OnsetDetector
@@ -36,10 +38,10 @@ private:
     double fs = 48000.0;
     int frameLen = 48;
     int pos = 0;
-    double accFull = 0.0, accDiff = 0.0;
-    double slowFull = 0.0, slowDiff = 0.0;
+    double accFull = 0.0, accDiff = 0.0, accDiff2 = 0.0;
+    double slowFull = 0.0, slowDiff = 0.0, slowDiff2 = 0.0;
     double slowCoeff = 0.03;
-    float prevX = 0.0f;
+    float prevX = 0.0f, prevX2 = 0.0f;
     std::int64_t count = 0;
     std::int64_t frameStart = 0;
     std::int64_t last = INT64_MIN / 2;

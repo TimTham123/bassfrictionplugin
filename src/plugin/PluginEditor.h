@@ -76,7 +76,8 @@ private:
     fr::DisplayFrame frame;
     bool showSelf = false;
     int advisorTick = 0;
-    int lastMode = -1, lastLatency = -1;
+    int lastMode = -1, lastLatency = -1, lastStyle = -1;
+    juce::Rectangle<int> modePanel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FrictionAudioProcessorEditor)
 };

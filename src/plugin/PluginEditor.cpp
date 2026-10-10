@@ -164,12 +164,10 @@ void FrictionAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (theme::background);
 
-    // wordmark
+    // wordmark: two detuned waves
     auto head = getLocalBounds().removeFromTop (48).reduced (14, 8);
     auto logo = head.removeFromLeft (150).toFloat();
-    g.setColour (theme::accent);
     const float cy = logo.getCentreY();
-    juce::Path waves;
     for (int k = 0; k < 2; ++k)
     {
         juce::Path w;
@@ -185,6 +183,32 @@ void FrictionAudioProcessorEditor::paint (juce::Graphics& g)
     g.setColour (theme::text);
     g.setFont (theme::font (21.0f, true));
     g.drawText ("FRICTION", logo.withTrimmedLeft (32), juce::Justification::centredLeft);
+
+    // mode panel
+    if (! modePanel.isEmpty())
+    {
+        const auto r = modePanel.toFloat();
+        g.setColour (theme::panel);
+        g.fillRoundedRectangle (r, 6.0f);
+        g.setColour (theme::outline);
+        g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
+        const int mode = modeButtons.selected();
+        const bool track = latencyButtons.selected() == 1;
+        const juce::String title = track ? "TRACK (0 ms)" : (mode == 0 ? "SMOOTH" : (mode == 1 ? "RETUNE" : "TENSION"));
+        const juce::Colour col = track ? theme::reference : (mode == 0 ? theme::gain : (mode == 1 ? theme::shift : theme::tension));
+        g.setColour (col);
+        g.setFont (theme::font (12.0f, true));
+        g.drawText (title, r.reduced (10.0f, 6.0f).removeFromTop (14.0f), juce::Justification::centredLeft);
+        if (track || mode == 0)
+        {
+            g.setColour (theme::textDim);
+            g.setFont (theme::font (12.0f));
+            const juce::String txt = track
+                ? "Zero-latency tracking bells (Smooth only). Decisions lag the audio by ~25 ms; Retune and Tension need Mix."
+                : "Cuts only the target partials that beat against the reference. Depth = up to 24 dB x Amount, scaled by friction above the Sensitivity threshold.";
+            g.drawFittedText (txt, r.reduced (10.0f, 6.0f).withTrimmedTop (18.0f).toNearestInt(), juce::Justification::topLeft, 5);
+        }
+    }
 }
 
 void FrictionAudioProcessorEditor::resized()
@@ -220,10 +244,11 @@ void FrictionAudioProcessorEditor::resized()
     side.removeFromTop (8);
     advisorPanel.setBounds (side);
 
-    // knob row
-    const int nSlots = 12;
-    const int slotW = foot.getWidth() / nSlots;
-    auto slot = [&] () { return foot.removeFromLeft (slotW).reduced (4, 0); };
+    // knob row (10 slots) + mode panel on the right
+    modePanel = foot.removeFromRight (juce::jlimit (230, 340, foot.getWidth() / 4));
+    foot.removeFromRight (8);
+    const int slotW = foot.getWidth() / 10;
+    auto slot = [&] () { return foot.removeFromLeft (slotW).reduced (3, 0); };
     amount.setBounds (slot());
     sensitivity.setBounds (slot());
     attack.setBounds (slot());
@@ -238,19 +263,20 @@ void FrictionAudioProcessorEditor::resized()
         focusLabel.setBounds (s.removeFromTop (16));
         focusBox.setBounds (s.removeFromTop (26).reduced (0, 1));
     }
-    // mode-specific (two slots)
-    auto ms1 = slot(), ms2 = slot();
-    maxCents.setBounds (ms1);
-    beatRate.setBounds (ms1);
-    {
-        auto s = ms2;
-        auto top = s.removeFromTop (60);
-        retuneStyleLabel.setBounds (top.removeFromTop (16));
-        retuneStyleBox.setBounds (top.removeFromTop (26).reduced (0, 1));
-        tensionStyleLabel.setBounds (retuneStyleLabel.getBounds());
-        tensionStyleBox.setBounds (retuneStyleBox.getBounds());
-        wholeOffset.setBounds (s.withTrimmedTop (0));
-    }
+
+    auto mp = modePanel.reduced (8, 6);
+    mp.removeFromTop (16);
+    auto knobArea = mp.removeFromLeft (juce::jmin (96, mp.getWidth() / 2));
+    maxCents.setBounds (knobArea);
+    beatRate.setBounds (knobArea);
+    mp.removeFromLeft (6);
+    retuneStyleLabel.setBounds (mp.removeFromTop (16));
+    tensionStyleLabel.setBounds (retuneStyleLabel.getBounds());
+    retuneStyleBox.setBounds (mp.removeFromTop (26).reduced (0, 1));
+    tensionStyleBox.setBounds (retuneStyleBox.getBounds());
+    mp.removeFromTop (6);
+    wholeOffset.label.setBounds (mp.removeFromTop (16));
+    wholeOffset.slider.setBounds (mp.removeFromTop (24));
     updateModeVisibility();
 }
 
@@ -260,28 +286,24 @@ void FrictionAudioProcessorEditor::updateModeVisibility()
     const bool track = latencyButtons.selected() == 1;
     const bool retune = mode == 1 && ! track;
     const bool tension = mode == 2 && ! track;
-    maxCents.setVisible (retune || (tension && false));
+    maxCents.setVisible (retune);
     retuneStyleBox.setVisible (retune);
     retuneStyleLabel.setVisible (retune);
     beatRate.setVisible (tension);
     tensionStyleBox.setVisible (tension);
     tensionStyleLabel.setVisible (tension);
-    // the offset knob shares space under the style box: only meaningful for Whole Fixed
     const bool fixed = retune && retuneStyleBox.getSelectedId() == 3;
+    wholeOffset.slider.setSliderStyle (juce::Slider::LinearBar);
+    wholeOffset.label.setText ("OFFSET (WHOLE FIXED)", juce::dontSendNotification);
+    wholeOffset.label.setJustificationType (juce::Justification::centredLeft);
     wholeOffset.setVisible (fixed);
-    if (wholeOffset.slider.isVisible())
-    {
-        auto b = retuneStyleBox.getBounds();
-        wholeOffset.slider.setBounds (b.getX(), b.getBottom() + 2, b.getWidth(), juce::jmax (20, getHeight() - b.getBottom() - 10));
-        wholeOffset.label.setVisible (false);
-        wholeOffset.slider.setSliderStyle (juce::Slider::LinearBar);
-    }
-    modeButtons.setEnabled (true);
+    repaint (modePanel);
 }
 
 void FrictionAudioProcessorEditor::refreshNow()
 {
     timerCallback();
+    advisorPanel.update();
 }
 
 void FrictionAudioProcessorEditor::timerCallback()
@@ -301,11 +323,12 @@ void FrictionAudioProcessorEditor::timerCallback()
         advisorTick = 0;
         advisorPanel.update();
     }
-    const int mode = modeButtons.selected(), lat = latencyButtons.selected();
-    if (mode != lastMode || lat != lastLatency)
+    const int mode = modeButtons.selected(), lat = latencyButtons.selected(), style = retuneStyleBox.getSelectedId();
+    if (mode != lastMode || lat != lastLatency || style != lastStyle)
     {
         lastMode = mode;
         lastLatency = lat;
+        lastStyle = style;
         updateModeVisibility();
     }
     if (presetBox.getSelectedId() != proc.getCurrentProgram() + 1)

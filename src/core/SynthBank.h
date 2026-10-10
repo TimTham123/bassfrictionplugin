@@ -32,6 +32,8 @@ public:
     void render (float* out, int numSamples) noexcept;
 
     int activeVoices() const noexcept;
+    /** Copies current voice frequencies/amplitudes (for display). Returns the count. */
+    int snapshot (float* freq, float* amp, int maxVoices) const noexcept;
     bool isSilent() const noexcept { return activeVoices() == 0; }
 
 private:

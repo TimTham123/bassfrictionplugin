@@ -119,6 +119,7 @@ void FrictionEngine::prepare (double sampleRate, int maxBlockSize, int numTarget
 
     paramAlpha = onePoleCoeff (0.010, fs);
     fadeStep = (float) (1.0 / (0.010 * fs));
+    preMaskStep = (float) (1.0 / (0.002 * fs));
 
     reset();
 }
@@ -177,12 +178,16 @@ void FrictionEngine::reset()
     bypassSm = params.bypass ? 1.0f : 0.0f;
     wetFade = 1.0f;
     outFade = 1.0f;
+    preMask = preMaskTarget = 1.0f;
     modeTransition = latencyTransition = false;
 
     nCurT = nCurR = nPv = 0;
     totalCross = totalSelfF = 0.0f;
     worstCross = worstSelf = Clash();
     lastLfT = lastLfR = LfEstimate();
+    for (int k = 0; k < kLfHarmonics; ++k)
+        lfCorrT[k] = lfCorrR[k] = 0.0f;
+    lfCorrF0T = lfCorrF0R = 0.0f;
     selfMode = false;
     scStatus = SidechainStatus::Absent;
     refEnergySmooth = 0.0;
@@ -364,10 +369,15 @@ void FrictionEngine::process (float* const* io, int numCh, const float* const* s
                 else
                 {
                     const bool idle = lastNonIdentityTrigger <= t - mixN;
+                    // pre-echo guard: just before a detected onset the spectral processing would smear the
+                    // transient's removed component backwards in time, so the time-aligned dry is used there
+                    preMask += preMask < preMaskTarget ? std::min (preMaskStep, preMaskTarget - preMask)
+                                                       : -std::min (preMaskStep, preMask - preMaskTarget);
+                    const float pm = 0.5f - 0.5f * std::cos ((float) kPi * preMask);
                     for (int c = 0; c < ch; ++c)
                     {
                         float& o = ola[c][(size_t) (t & olaMask)];
-                        wet[c] = idle ? dry[c] : o;
+                        wet[c] = idle ? dry[c] : (pm >= 1.0f ? o : dry[c] + pm * (o - dry[c]));
                         o = 0.0f;
                     }
                 }
@@ -420,7 +430,10 @@ void FrictionEngine::process (float* const* io, int numCh, const float* const* s
             wetFade = modeTransition ? std::max (0.0f, wetFade - fadeStep) : std::min (1.0f, wetFade + fadeStep);
             outFade = latencyTransition ? std::max (0.0f, outFade - fadeStep) : std::min (1.0f, outFade + fadeStep);
 
-            const float mixEff = mixSm * wetFade * (1.0f - bypassSm);
+            // raised-cosine shaping of the transition fades (less splatter than linear ramps)
+            const float wetShape = wetFade >= 1.0f ? 1.0f : 0.5f - 0.5f * std::cos ((float) kPi * wetFade);
+            const float outShape = outFade >= 1.0f ? 1.0f : 0.5f - 0.5f * std::cos ((float) kPi * outFade);
+            const float mixEff = mixSm * wetShape * (1.0f - bypassSm);
             const float dryKeep = 1.0f - deltaSm * (1.0f - bypassSm);
             for (int c = 0; c < ch; ++c)
             {
@@ -430,7 +443,7 @@ void FrictionEngine::process (float* const* io, int numCh, const float* const* s
                 if (trimSm != 1.0f)
                     y *= trimSm;
                 if (outFade != 1.0f)
-                    y *= outFade;
+                    y *= outShape;
                 io[c][i + j] = std::isfinite (y) ? y : 0.0f;
             }
         }
@@ -483,6 +496,14 @@ void FrictionEngine::controlTick() noexcept
             centsSched.pop();
         }
 
+        // pre-echo guard target for the samples of this tick (input time t - L)
+        {
+            const std::int64_t inTime = now - L;
+            const std::int64_t u = onsets.nextOnsetAfter (inTime - 1);
+            const bool preOnset = u != INT64_MAX && (double) (u - inTime) <= preEchoSec * fs;
+            preMaskTarget = preOnset ? 0.0f : 1.0f;
+        }
+
         const double tickRate = fs / kControlTick;
         const float aUp = onePoleCoeff (params.attackMs * 0.001, tickRate);
         const float aDown = onePoleCoeff (params.releaseMs * 0.001, tickRate);
@@ -519,7 +540,7 @@ void FrictionEngine::onLfHop() noexcept
             maxA = std::max (maxA, h);
         for (int k = 0; k < kLfHarmonics; ++k)
         {
-            const float f = (float) (k + 1) * eT.f0;
+            const float f = (float) (k + 1) * eT.f0 * lfCorrFor (lfCorrT, lfCorrF0T, eT.f0, k);
             if (f >= xo || f < 20.0f)
                 continue;
             if (eT.harm[k] < std::max (kAudibleFloor, maxA * 0.01f))
@@ -559,7 +580,7 @@ void FrictionEngine::onLfHop() noexcept
                     maxA = std::max (maxA, h);
                 for (int k = 0; k < kLfHarmonics && nr < kMaxPartials; ++k)
                 {
-                    const float f = (float) (k + 1) * eR.f0;
+                    const float f = (float) (k + 1) * eR.f0 * lfCorrFor (lfCorrR, lfCorrF0R, eR.f0, k);
                     if (f >= xo || eR.harm[k] < std::max (kAudibleFloor, maxA * 0.01f))
                         continue;
                     ref[nr].freq = f;
@@ -715,9 +736,41 @@ void FrictionEngine::onFrame() noexcept
     for (int p = 0; p < nT; ++p) maxAmpT = std::max (maxAmpT, pkT[p].amp);
     for (int p = 0; p < nR; ++p) maxAmpR = std::max (maxAmpR, pkR[p].amp);
 
+    // Cross-check: where a stationary STFT peak lies within one bin of a low-band harmonic but
+    // disagrees, the STFT frequency is used (YIN can lock to a subharmonic of a stronger tone above
+    // the crossover). Only at Mix-mode resolution; non-stationary peaks (kick drops) keep YIN.
+    auto correctLf = [&] (Partial* list, int n, const SpectralPeak* pk, int np, double binHz)
+    {
+        if (binHz > 15.0)
+            return;
+        for (int i = 0; i < n; ++i)
+        {
+            Partial& q = list[i];
+            if (q.src != 1)
+                continue;
+            int best = -1;
+            float bestD = (float) binHz;
+            for (int p = 0; p < np; ++p)
+            {
+                if (! pk[p].stationary || pk[p].freq > 1.5f * xo)
+                    continue;
+                const float d = std::abs (pk[p].freq - q.freq);
+                if (d < bestD) { bestD = d; best = p; }
+            }
+            if (best >= 0 && bestD > std::max (0.3f, 0.15f * (float) binHz))
+            {
+                q.freq = pk[best].freq;
+                q.amp = pk[best].amp;
+            }
+        }
+    };
+
     nCurT = 0;
     if (lfVT)
+    {
         addLf (eT, curT, nCurT);
+        correctLf (curT, nCurT, pkT, nT, a.specT.binHz());
+    }
     for (int p = 0; p < nT && nCurT < kMaxPartials; ++p)
     {
         if (lfVT && pkT[p].freq < xo)
@@ -737,7 +790,10 @@ void FrictionEngine::onFrame() noexcept
 
     nCurR = 0;
     if (lfVR)
+    {
         addLf (eRf, curR, nCurR);
+        correctLf (curR, nCurR, pkR, nR, a.specR.binHz());
+    }
     for (int p = 0; p < nR && nCurR < kMaxPartials; ++p)
     {
         if (lfVR && pkR[p].freq < xo)
@@ -752,6 +808,26 @@ void FrictionEngine::onFrame() noexcept
         q.slot = slotR[p];
         q.src = 0;
     }
+
+    // remember corrected low-band frequencies for the LF hops until the next frame
+    for (int k = 0; k < kLfHarmonics; ++k)
+        lfCorrT[k] = lfCorrR[k] = 0.0f;
+    lfCorrF0T = lfVT ? eT.f0 : 0.0f;
+    lfCorrF0R = lfVR ? eRf.f0 : 0.0f;
+    for (int i = 0; i < nCurT; ++i)
+        if (curT[i].src == 1)
+        {
+            const int k = curT[i].slot - kLfSlotBase;
+            if (k >= 0 && k < kLfHarmonics && lfVT && std::abs (curT[i].freq - (float) (k + 1) * eT.f0) > 0.01f)
+                lfCorrT[k] = curT[i].freq / ((float) (k + 1) * eT.f0);
+        }
+    for (int i = 0; i < nCurR; ++i)
+        if (curR[i].src == 1)
+        {
+            const int k = curR[i].slot - kLfSlotBase;
+            if (k >= 0 && k < kLfHarmonics && lfVR && std::abs (curR[i].freq - (float) (k + 1) * eRf.f0) > 0.01f)
+                lfCorrR[k] = curR[i].freq / ((float) (k + 1) * eRf.f0);
+        }
 
     worstCross = Clash();
     worstSelf = Clash();
@@ -1536,9 +1612,9 @@ void FrictionEngine::publishDisplay (Analysis& a) noexcept
     d.selfAnalysis = selfMode;
     d.lfTargetVoiced = lastLfT.voiced;
     d.lfRefVoiced = lastLfR.voiced && sidechainPresentNow;
-    d.lfTargetF0 = lastLfT.f0;
-    d.lfRefF0 = lastLfR.f0;
-    d.synthVoices = synth.activeVoices();
+    d.lfTargetF0 = lastLfT.f0 * lfCorrFor (lfCorrT, lfCorrF0T, lastLfT.f0, 0);
+    d.lfRefF0 = lastLfR.f0 * lfCorrFor (lfCorrR, lfCorrF0R, lastLfR.f0, 0);
+    d.synthVoices = synth.snapshot (d.voiceFreq, d.voiceAmp, 16);
     d.latencySamples = currentLatency();
     displayBuf.publish();
 }
