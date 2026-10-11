@@ -31,7 +31,7 @@ Read this before using it.
 | JUCE plug-in, **Windows x64 (MSVC)** VST3 + Standalone | on **GitHub Actions** (`windows-latest`, Visual Studio 2022), not in this container | the full harness, the plug-in tests and pluginval run in the same CI job (see below) |
 | Inside real DAWs (Live, FL Studio, Reaper, Cubase, Studio One, Bitwig) | – | **not tested.** The routing steps below follow each DAW's documentation. |
 | Listening tests / real recordings | – | **not done.** All measurements use synthetic signals (sines, saws, kicks, piano-like and pad-like tones). |
-| Standalone app | yes | built and launched only through the tests (editor snapshots); never run interactively here (no display) |
+| Standalone app | yes | **not launched.** The plug-in tests drive the same processor and editor in a test host (including editor snapshots), but the standalone executable itself was never run (no display here) |
 
 **Windows binaries.** This development container is Linux, and its network policy blocks the
 Microsoft SDK/CRT downloads, so MSVC cannot run here. The CMake project targets MSVC directly.
@@ -166,8 +166,8 @@ All parameters are automatable and are saved with the session.
 | Track (any rate) | 0 |
 
 Smooth, Retune and Tension share the Mix latency, so switching modes never changes the latency.
-Switching Mix ↔ Track does change it. Friction mutes over 10 ms and reports the new value to the
-host. Bypass is latency-compensated.
+Switching Mix ↔ Track does change it. Friction mutes for 10 ms and reports the new value to the
+host within 0.2 s. Bypass is latency-compensated.
 
 **Track mode trade-offs:** decisions lag the audio, because the analysis cannot look ahead. Dips
 arrive a few tens of milliseconds late on new notes. The high band uses a shorter analysis window,

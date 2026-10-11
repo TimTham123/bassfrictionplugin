@@ -515,8 +515,8 @@ The Advisor's last result and the editor size are stored as extra properties in 
 * Bells add minimum-phase shift around each cut.
 * There is no Retune or Tension.
 
-Changing the latency mode during playback causes a 10 ms mute crossfade, and the new latency reaches
-the host from the message thread.
+Changing the latency mode during playback causes a 10 ms mute crossfade. The new latency reaches
+the host from the message thread: a 5 Hz timer forwards it, so within 0.2 s.
 
 ---
 
