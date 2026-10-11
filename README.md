@@ -176,18 +176,19 @@ minimum-phase bell filters. There is no Retune or Tension.
 
 ## CPU
 
-Measured by the harness on the container's 2.1 GHz Xeon, one thread, 48 kHz, stereo target and
-stereo sidechain, block 256:
+Measured by the harness, one thread, 48 kHz, stereo target and stereo sidechain, block 256:
 
-| Mode | % of one core |
-|---|---|
-| Mix / Smooth | 4.5 |
-| Mix / Retune per-partial | 7.8 |
-| Mix / Retune whole auto | 6.3 |
-| Mix / Tension synth | 4.4 |
-| Track / Smooth | 2.4 |
+| Mode | Linux container (2.1 GHz Xeon, GCC) | Windows CI runner (MSVC) |
+|---|---|---|
+| Mix / Smooth | 4.5 % | 3.0 % |
+| Mix / Retune per-partial | 7.8 % | 4.9 % |
+| Mix / Retune whole auto | 6.3 % | 4.0 % |
+| Mix / Tension synth | 4.4 % | 2.9 % |
+| Track / Smooth | 2.4 % | 1.8 % |
 
-The Windows CI report contains the same measurements on the GitHub runner.
+Values are % of one core. The Windows column comes from CI run
+[38099228414](https://github.com/TimTham123/bassfrictionplugin/actions/runs/38099228414) (commit
+c0f04f2); runner speed varies from run to run.
 
 ---
 
