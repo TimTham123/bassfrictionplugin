@@ -593,6 +593,10 @@ the host from the message thread.
 27. **Latency sync at 5 Hz.** The processor's timer only forwards latency changes (Mix ↔ Track) to the
     host. 5 Hz keeps the message thread mostly idle, which also makes a teardown race in pluginval's
     Linux host (TEST_REPORT.md) less likely. The engine itself switches immediately.
+28. **The Advisor FIFO is allocated once, in the engine constructor.** The Advisor thread pops from it
+    at any time. `prepare()` used to reset its read and write indices, and a reset that races a pop
+    can leave the FIFO permanently "full", so Learn would silently stop receiving data after a
+    sample-rate or buffer-size change.
 
 ---
 
@@ -600,7 +604,7 @@ the host from the message thread.
 
 The harness (`tests/`) generates `TEST_REPORT.md`, which lists every check with its measured value and
 criterion, and the WAV renders in `renders/`. Summary of the run on Linux (GCC 13.3, 2.1 GHz
-Xeon VM): **68/68 core checks and 11/11 plug-in checks pass.** External validators on the Linux
+Xeon VM): **69/69 core checks and 11/11 plug-in checks pass.** External validators on the Linux
 VST3: **pluginval 1.0.4 at strictness 10 passes**, and **Steinberg's VST3 validator (SDK 3.8.1,
 extensive mode) passes 537/537 tests.**
 

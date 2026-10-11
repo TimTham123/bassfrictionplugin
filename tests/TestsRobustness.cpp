@@ -337,6 +337,31 @@ void ft::testsRobustness (Context& ctx)
                  "0 calls to operator new on the audio thread after prepare(); counter self-check >= 2");
     }
 
+    // ---- prepare() must not reset the Advisor FIFO: the Advisor thread may be popping at that moment,
+    //      and resetting head/tail under a concurrent pop can leave the FIFO permanently "full"
+    {
+        Chans tgt, ref;
+        material (fs, 2.0, tgt, ref);
+        fr::Params p;
+        p.learn = true;
+        auto e = makeEngine (fs, 512, 2, p);
+        RunOptions o;
+        runEngine (*e, tgt, ref, o);
+        const auto queued = e->advisorFifo().size();
+        e->prepare (96000.0, 256, 2);
+        const auto after = e->advisorFifo().size();
+        fr::AdvisorFrame f;
+        size_t popped = 0;
+        while (e->advisorFifo().pop (f))
+            ++popped;
+        runEngine (*e, tgt, ref, o);
+        const auto refilled = e->advisorFifo().size();
+        const bool ok = queued > 0 && after == queued && popped == queued && refilled > 0;
+        ctx.add ("Robustness", "Advisor FIFO untouched by prepare() (Advisor thread may be popping)", ok,
+                 fmt ("%zu frames queued, %zu after prepare(), %zu popped, %zu queued after more audio", (size_t) queued, (size_t) after, popped, (size_t) refilled),
+                 "prepare() leaves the FIFO's contents and indices unchanged; frames keep arriving");
+    }
+
     // ---- hot input
     {
         const double secs = 3.0;

@@ -32,7 +32,12 @@ namespace
     }
 }
 
-FrictionEngine::FrictionEngine() = default;
+FrictionEngine::FrictionEngine()
+{
+    // allocated once, here: the Advisor thread pops from this FIFO at any time, so prepare() must not
+    // reset it (resetting head/tail under a concurrent pop can leave the FIFO permanently "full")
+    advisorQ.prepare (1024);
+}
 
 void FrictionEngine::configureAnalysis (Analysis& a, int N, int H)
 {
@@ -119,7 +124,6 @@ void FrictionEngine::prepare (double sampleRate, int maxBlockSize, int numTarget
     pv.prepare (mixN, mixH, fs, kMaxSlots);
     synth.prepare (fs, kMaxSynthVoices);
 
-    advisorQ.prepare (1024);
 
     paramAlpha = onePoleCoeff (0.010, fs);
     fadeStep = (float) (1.0 / (0.010 * fs));
