@@ -586,6 +586,13 @@ the host from the message thread.
     than linear ramps. Measured worst burst while switching: −56.5 dB re output RMS (§11).
 25. **Per-partial Retune ships.** It passed every artifact test (transient smearing, phasiness,
     partials outside Range; §11), so decision 9's fallback (Whole-signal only) was not needed.
+26. **Own on/off parameter class for Delta and Bypass.** `juce::AudioParameterBool` keeps the raw
+    normalised value a host sends (0.44 means "off"). The value-tree state compares snapped values, so
+    restoring a saved "off" over 0.44 changed nothing (found by pluginval). The replacement stores
+    only 0 or 1.
+27. **Latency sync at 5 Hz.** The processor's timer only forwards latency changes (Mix ↔ Track) to the
+    host. 5 Hz keeps the message thread mostly idle, which also makes a teardown race in pluginval's
+    Linux host (TEST_REPORT.md) less likely. The engine itself switches immediately.
 
 ---
 
@@ -593,7 +600,7 @@ the host from the message thread.
 
 The harness (`tests/`) generates `TEST_REPORT.md`, which lists every check with its measured value and
 criterion, and the WAV renders in `renders/`. Summary of the run on Linux (GCC 13.3, 2.1 GHz
-Xeon VM): **68/68 core checks and 10/10 plug-in checks pass.** External validators on the Linux
+Xeon VM): **68/68 core checks and 11/11 plug-in checks pass.** External validators on the Linux
 VST3: **pluginval 1.0.4 at strictness 10 passes**, and **Steinberg's VST3 validator (SDK 3.8.1,
 extensive mode) passes 537/537 tests.**
 

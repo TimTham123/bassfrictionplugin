@@ -27,7 +27,7 @@ Read this before using it.
 | | Built | Tested |
 |---|---|---|
 | DSP core + offline harness, **Linux** (GCC 13.3, this repo's container) | yes | **68/68 checks pass** ([TEST_REPORT.md](TEST_REPORT.md)), including **0 heap allocations** in 10,990 `process()` calls |
-| JUCE plug-in, **Linux** VST3 + Standalone | yes | 10/10 plug-in checks pass (incl. 0 allocations in 2,250 `processBlock` calls); **pluginval 1.0.4 strictness 10: pass**; **Steinberg VST3 validator (SDK 3.8.1, extensive): 537/537** |
+| JUCE plug-in, **Linux** VST3 + Standalone | yes | 11/11 plug-in checks pass (incl. 0 allocations in 2,250 `processBlock` calls); **pluginval 1.0.4 strictness 10: pass** (it found a state-restore bug in the bool parameters, now fixed; see TEST_REPORT.md); **Steinberg VST3 validator (SDK 3.8.1, extensive): 537/537** |
 | JUCE plug-in, **Windows x64 (MSVC)** VST3 + Standalone | on **GitHub Actions** (`windows-latest`, Visual Studio 2022), not in this container | the full harness, the plug-in tests and pluginval run in the same CI job (see below) |
 | Inside real DAWs (Live, FL Studio, Reaper, Cubase, Studio One, Bitwig) | – | **not tested.** The routing steps below follow each DAW's documentation. |
 | Listening tests / real recordings | – | **not done.** All measurements use synthetic signals (sines, saws, kicks, piano-like and pad-like tones). |

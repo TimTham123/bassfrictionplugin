@@ -57,8 +57,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     layout.add (std::make_unique<AudioParameterChoice> (pid (ids::focus), "Focus", StringArray { "Low", "High", "Both" }, 2));
     layout.add (std::make_unique<AudioParameterFloat> (pid (ids::crossover), "Crossover", logRange (80.0f, 400.0f, 0.1f), 200.0f,
                                                        AudioParameterFloatAttributes().withLabel ("Hz").withStringFromValueFunction (hzText).withValueFromStringFunction (hzValue)));
-    layout.add (std::make_unique<AudioParameterBool> (pid (ids::delta), "Delta", false));
-    layout.add (std::make_unique<AudioParameterBool> (pid (ids::bypass), "Bypass", false));
+    layout.add (std::make_unique<BoolParameter> (pid (ids::delta), "Delta", false));
+    layout.add (std::make_unique<BoolParameter> (pid (ids::bypass), "Bypass", false));
     layout.add (std::make_unique<AudioParameterFloat> (pid (ids::maxCents), "Max Cents", NormalisableRange<float> (1.0f, 100.0f, 0.1f), 50.0f,
                                                        AudioParameterFloatAttributes().withLabel ("ct").withStringFromValueFunction (centsText)));
     layout.add (std::make_unique<AudioParameterChoice> (pid (ids::retuneStyle), "Retune Style", StringArray { "Per-partial", "Whole Auto", "Whole Fixed" }, 0));

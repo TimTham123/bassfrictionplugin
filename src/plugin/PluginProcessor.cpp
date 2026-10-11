@@ -103,7 +103,9 @@ FrictionAudioProcessor::FrictionAudioProcessor()
     advisorWorker = std::make_unique<AdvisorWorker> (eng->advisorFifo());
     advisorWorker->start();
     setLatencySamples (eng->latencyFor (params.read().latencyMode));
-    startTimerHz (20);
+    // forwards latency changes (Mix <-> Track) from the audio thread to the host; 5 Hz keeps the
+    // message thread mostly idle, and the engine itself switches immediately with a 10 ms crossfade
+    startTimerHz (5);
 }
 
 FrictionAudioProcessor::~FrictionAudioProcessor()

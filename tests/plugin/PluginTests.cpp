@@ -204,6 +204,56 @@ int main (int argc, char** argv)
              "0 mismatches");
     }
 
+    // ---- state restore when the host left parameters at unsnapped normalised values (as pluginval does):
+    //      random raw values -> save -> other random raw values -> restore -> values must match the save
+    {
+        FrictionAudioProcessor p;
+        std::mt19937 rng (1234);
+        std::uniform_real_distribution<float> u (0.0f, 1.0f);
+        const int trials = 200;
+        int failedTrials = 0;
+        std::string firstFail;
+        for (int trial = 0; trial < trials; ++trial)
+        {
+            // a host sets the normalised value and the wrapper notifies listeners (as JUCE's VST3 wrapper does)
+            for (auto* prm : p.getParameters())
+            {
+                const float v = u (rng);
+                prm->setValue (v);
+                prm->sendValueChangedMessageToListeners (v);
+            }
+            juce::MemoryBlock mb;
+            p.getStateInformation (mb);
+            std::vector<float> saved;
+            for (auto* prm : p.getParameters())
+                saved.push_back (prm->getValue());
+            for (auto* prm : p.getParameters())
+            {
+                const float v = u (rng);
+                prm->setValue (v);
+                prm->sendValueChangedMessageToListeners (v);
+            }
+            p.setStateInformation (mb.getData(), (int) mb.getSize());
+            bool ok = true;
+            for (size_t i = 0; i < saved.size(); ++i)
+            {
+                auto* prm = p.getParameters()[(int) i];
+                if (std::abs (prm->getValue() - saved[i]) > 0.1f)
+                {
+                    ok = false;
+                    if (firstFail.empty())
+                        firstFail = prm->getName (64).toStdString() + " " + fmt ("expected %.4f got %.4f", saved[i], prm->getValue());
+                }
+            }
+            if (! ok)
+                ++failedTrials;
+        }
+        add (failedTrials == 0, "State restore after unsnapped host values (pluginval-style)",
+             fmt ("%.0f of %.0f random trials restored every parameter", (double) (trials - failedTrials), (double) trials)
+                 + (firstFail.empty() ? std::string() : "; first failure: " + firstFail),
+             "every parameter within 0.1 of its saved normalised value (pluginval's tolerance)");
+    }
+
     // ---- presets
     {
         FrictionAudioProcessor p;

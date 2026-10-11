@@ -34,6 +34,42 @@ namespace ids
 
 constexpr int kParamVersion = 1;
 
+/**
+    On/off parameter that stores only 0 or 1.
+    juce::AudioParameterBool keeps whatever normalised value a host sends (0.23 means "off"), while
+    AudioProcessorValueTreeState compares snapped values. Restoring a saved "off" over 0.44 then
+    changes nothing and the parameter reports 0.44 instead of the saved value (found by pluginval).
+*/
+class BoolParameter final : public juce::RangedAudioParameter
+{
+public:
+    BoolParameter (const juce::ParameterID& pid, const juce::String& paramName, bool defaultValue)
+        : RangedAudioParameter (pid, paramName), value (defaultValue ? 1.0f : 0.0f), defaultNorm (defaultValue ? 1.0f : 0.0f)
+    {
+    }
+
+    bool get() const noexcept { return value.load (std::memory_order_relaxed) >= 0.5f; }
+    const juce::NormalisableRange<float>& getNormalisableRange() const override { return range; }
+
+private:
+    float getValue() const override { return value.load (std::memory_order_relaxed); }
+    void setValue (float v) override { value.store (v >= 0.5f ? 1.0f : 0.0f, std::memory_order_relaxed); }
+    float getDefaultValue() const override { return defaultNorm; }
+    int getNumSteps() const override { return 2; }
+    bool isDiscrete() const override { return true; }
+    bool isBoolean() const override { return true; }
+    juce::String getText (float v, int) const override { return v >= 0.5f ? "On" : "Off"; }
+    float getValueForText (const juce::String& text) const override
+    {
+        const auto t = text.trim().toLowerCase();
+        return (t == "on" || t == "yes" || t == "true" || t.getIntValue() != 0) ? 1.0f : 0.0f;
+    }
+
+    std::atomic<float> value;
+    const float defaultNorm;
+    const juce::NormalisableRange<float> range { 0.0f, 1.0f, 1.0f };
+};
+
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
 /** Cached raw parameter pointers for lock-free reads on the audio thread. */
