@@ -593,7 +593,7 @@ the host from the message thread.
 
 The harness (`tests/`) generates `TEST_REPORT.md`, which lists every check with its measured value and
 criterion, and the WAV renders in `renders/`. Summary of the run on Linux (GCC 13.3, 2.1 GHz
-Xeon VM): **67/67 core checks and 9/9 plug-in checks pass.** External validators on the Linux
+Xeon VM): **68/68 core checks and 10/10 plug-in checks pass.** External validators on the Linux
 VST3: **pluginval 1.0.4 at strictness 10 passes**, and **Steinberg's VST3 validator (SDK 3.8.1,
 extensive mode) passes 537/537 tests.**
 
@@ -606,6 +606,7 @@ extensive mode) passes 537/537 tests.**
 | Nulls | Amount 0 and Mix 0 in every mode, and a silent sidechain: output **bit-exact** equal to the dry signal delayed by the latency. |
 | Consonant references | Unison: bit-exact (no processing). Octave: residual −35.1 dB re input. |
 | Retune artifacts | Drum hits: no pre-echo (at the level of the input's silence between hits); attack energy within 0.21 dB (above 2 kHz within 0.72 dB). Phasiness: crest factor 16.8 → 15.7 dB, AM ripple of a shifted partial 0.04 dB. Partials outside Range: residual −58 / −66 dB. Whole-signal hits on time within 0.04 ms. |
+| Real-time safety | **0 heap allocations** on the audio thread: 10,990 `setParams()`+`process()` calls (every mode, Self, no sidechain, live switching, Advisor learning) and 2,250 `processBlock`/`processBlockBypassed` calls under random automation. Counted by a replaced global `operator new` (per thread), with a self-check that the counter sees a deliberate allocation. No locks, I/O or exceptions on that path (by inspection: the core uses no mutex, file or stream I/O, or `throw`). |
 | Robustness | NaN/Inf (treated as 0), DC passed unchanged, denormal-level input (time ratio 0.18), **bit-exact block-size independence** (block sizes 1, 7, 64, 333, 512, 4096, all modes), the same Smooth/Retune results at 44.1–192 kHz, linked stereo exact, live mode switching (worst burst −56.5 dB), +18 dBFS input. |
 | Latency | Impulse latency equals the reported latency at 6 sample rates × 2 modes; output aligned while processing; bypass latency-compensated. |
 | CPU (48 kHz, stereo + stereo sidechain) | Mix: Smooth 4.5 %, per-partial Retune 7.8 %, Whole Auto 6.3 %, Tension 4.4 %. Track: 2.4 % of one core. |

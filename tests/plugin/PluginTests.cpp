@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "AllocCounter.h"
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "Presets.h"
@@ -251,16 +252,26 @@ int main (int argc, char** argv)
         juce::MidiBuffer midi;
         bool finite = true;
         double peak = 0.0;
+        long long allocs = 0, blocks = 0;
         for (int pos = 0; pos + 128 <= (int) t[0].size(); pos += 128)
         {
             if ((pos / 128) % 8 == 0)
                 for (auto* prm : p.getParameters())
                     if (u (rng) < 0.3f)
                         prm->setValueNotifyingHost (u (rng));
+            if ((pos / 128) % 200 == 0)
+                p.setLearning ((pos / 128) % 400 == 0); // Advisor learning toggled from the "UI"
             buf.clear();
             for (int c = 0; c < 2; ++c) buf.copyFrom (c, 0, t[(size_t) c].data() + pos, 128);
             for (int c = 0; c < 2; ++c) buf.copyFrom (2 + c, 0, s[(size_t) c].data() + pos, 128);
-            p.processBlock (buf, midi);
+            // only the audio-thread calls are counted
+            ft::AllocCounter::begin();
+            if ((pos / 128) % 16 == 15)
+                p.processBlockBypassed (buf, midi);
+            else
+                p.processBlock (buf, midi);
+            allocs += ft::AllocCounter::end();
+            ++blocks;
             for (int c = 0; c < 2; ++c)
                 for (int i = 0; i < 128; ++i)
                 {
@@ -270,8 +281,12 @@ int main (int argc, char** argv)
                 }
             if ((pos / 128) % 64 == 0) p.syncLatency();
         }
+        p.setLearning (false);
         add (finite && peak < 8.0, "Automation stress (random params every 8 blocks, 6 s)", fmt ("finite=%.0f, peak %.2f", finite ? 1.0 : 0.0, peak),
              "finite output, no blow-up (trim up to +24 dB)");
+        add (allocs == 0, "Real-time safety: no heap allocation in processBlock",
+             fmt ("%.0f allocations in %.0f processBlock / processBlockBypassed calls (random automation, Advisor learning on/off)", (double) allocs, (double) blocks),
+             "0 calls to operator new on the audio thread");
     }
 
     // ---- Advisor: Learn -> Stop -> result -> Apply (kick vs bass)

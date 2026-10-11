@@ -49,7 +49,8 @@ target_link_libraries(Friction
 
 if(FRICTION_BUILD_TESTS)
     juce_add_console_app(FrictionPluginTests PRODUCT_NAME "FrictionPluginTests")
-    target_sources(FrictionPluginTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/plugin/PluginTests.cpp)
+    target_sources(FrictionPluginTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/plugin/PluginTests.cpp
+                                               ${PROJECT_SOURCE_DIR}/tests/AllocCounter.cpp)
     target_include_directories(FrictionPluginTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
     target_link_libraries(FrictionPluginTests
         PRIVATE

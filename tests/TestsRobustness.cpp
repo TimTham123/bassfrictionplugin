@@ -1,4 +1,5 @@
 // Friction - robustness tests: NaN/Inf, DC, denormals, block size, sample rate, stereo linking
+#include "AllocCounter.h"
 #include "Harness.h"
 
 #include <chrono>
@@ -259,6 +260,81 @@ void ft::testsRobustness (Context& ctx)
         ctx.add ("Robustness", "Live switching (mode, style, latency, delta every 0.5 s): no clicks", db (worst / outRms) < -40.0 && allFinite (out[0]),
                  fmt ("worst 5 ms burst above 6 kHz %.1f dB re output RMS (at %.2f s) on a 226 Hz sine", db (worst / outRms), at),
                  "< -40 dB (fades are 10 ms raised-cosine)");
+    }
+
+    // ---- real-time safety: no heap allocation inside setParams() / process()
+    {
+        const double secs = 6.0;
+        Chans tgt, ref;
+        material (fs, secs, tgt, ref);
+        const size_t n = tgt[0].size();
+        struct Case { const char* name; int block; bool sidechain; int kind; };
+        const Case cases[] = {
+            { "Smooth/Mix", 256, true, 0 }, { "Smooth/Track", 256, true, 1 }, { "Retune per-partial", 256, true, 2 },
+            { "Retune whole auto", 256, true, 3 }, { "Retune whole fixed +50 c", 256, true, 4 }, { "Tension synth", 256, true, 5 },
+            { "Tension push", 256, true, 6 }, { "Self (forced)", 256, true, 7 }, { "no sidechain bus", 256, false, 0 },
+            { "live switching (mode/style/latency/delta/bypass)", 333, true, 8 },
+        };
+        long long total = 0;
+        long long calls = 0;
+        std::string bad;
+        for (const auto& c : cases)
+        {
+            fr::Params p;
+            p.amount = 0.9f;
+            p.sensitivity = 0.8f;
+            p.learn = true; // Advisor frames are pushed to the FIFO as well
+            switch (c.kind)
+            {
+                case 1: p.latencyMode = fr::LatencyMode::Track; break;
+                case 2: p.mode = fr::Mode::Retune; p.retuneStyle = fr::RetuneStyle::PerPartial; break;
+                case 3: p.mode = fr::Mode::Retune; p.retuneStyle = fr::RetuneStyle::WholeAuto; break;
+                case 4: p.mode = fr::Mode::Retune; p.retuneStyle = fr::RetuneStyle::WholeFixed; p.wholeOffsetCents = 50.0f; break;
+                case 5: p.mode = fr::Mode::Tension; p.tensionStyle = fr::TensionStyle::Synth; break;
+                case 6: p.mode = fr::Mode::Tension; p.tensionStyle = fr::TensionStyle::Push; break;
+                case 7: p.reference = fr::ReferenceSource::Self; break;
+                default: break;
+            }
+            auto e = makeEngine (fs, c.block, 2, p);
+            Chans work = tgt;
+            long long count = 0;
+            for (size_t pos = 0; pos < n; pos += (size_t) c.block)
+            {
+                const int len = (int) std::min ((size_t) c.block, n - pos);
+                if (c.kind == 8)
+                {
+                    const int phase = (int) ((double) pos / fs / 0.25);
+                    p.mode = (fr::Mode) (phase % 3);
+                    p.retuneStyle = (fr::RetuneStyle) ((phase / 3) % 3);
+                    p.tensionStyle = (fr::TensionStyle) ((phase / 2) % 2);
+                    p.latencyMode = (phase % 7 == 6) ? fr::LatencyMode::Track : fr::LatencyMode::Mix;
+                    p.delta = phase % 5 == 4;
+                    p.bypass = phase % 11 == 10;
+                }
+                float* io[2] = { work[0].data() + pos, work[1].data() + pos };
+                const float* sc[2] = { ref[0].data() + pos, ref[1].data() + pos };
+                AllocCounter::begin();
+                e->setParams (p);
+                e->process (io, 2, c.sidechain ? sc : nullptr, c.sidechain ? 2 : 0, len, c.sidechain);
+                count += AllocCounter::end();
+                ++calls;
+            }
+            total += count;
+            if (count != 0)
+                bad += fmt ("%s: %lld; ", c.name, count);
+        }
+        // self-check: the counter must see a deliberate allocation (volatile sink: cannot be elided)
+        static std::vector<float>* volatile sink = nullptr;
+        AllocCounter::begin();
+        sink = new std::vector<float> (16);
+        const long long probe = AllocCounter::end();
+        delete sink;
+        sink = nullptr;
+        ctx.add ("Robustness", "Real-time safety: no heap allocation in process()", total == 0 && probe >= 2,
+                 (total == 0 ? fmt ("0 allocations in %lld setParams()+process() calls over 10 configurations (all modes, Self, no sidechain, live switching, Advisor learning)", calls)
+                             : fmt ("%lld allocations: %s", total, bad.c_str()))
+                     + fmt ("; counter self-check saw %lld allocations for one new std::vector", probe),
+                 "0 calls to operator new on the audio thread after prepare(); counter self-check >= 2");
     }
 
     // ---- hot input

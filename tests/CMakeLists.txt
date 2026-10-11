@@ -7,7 +7,8 @@ add_executable(FrictionTests
     TestsTension.cpp
     TestsRobustness.cpp
     TestsDemos.cpp
-    TestsPerformance.cpp)
+    TestsPerformance.cpp
+    AllocCounter.cpp)
 
 target_link_libraries(FrictionTests PRIVATE FrictionCore)
 target_compile_features(FrictionTests PRIVATE cxx_std_17)

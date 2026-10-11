@@ -64,6 +64,10 @@ void FrictionEngine::configureAnalysis (Analysis& a, int N, int H)
 
 void FrictionEngine::prepare (double sampleRate, int maxBlockSize, int numTargetChannels)
 {
+    // build the roughness tables (function-local statics) here, not on the audio thread's first block
+    (void) Roughness::get();
+    (void) Roughness::zMax();
+
     fs = sampleRate > 0.0 ? sampleRate : 48000.0;
     maxBlock = std::max (1, maxBlockSize);
     nCh = std::clamp (numTargetChannels, 1, kMaxChannels);
